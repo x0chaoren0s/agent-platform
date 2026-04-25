@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-dotenv
+pydantic
+aiosqlite
+PyYAML
+watchdog
+openai
+agent-framework-core
+agent-framework-openai

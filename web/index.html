@@ -1,0 +1,1470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Platform</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --surface2: #21253a;
+    --border: #2d3250; --accent: #6c7eff; --accent2: #a78bfa;
+    --text: #e2e8f0; --muted: #6b7280; --user: #3b82f6;
+    --green: #34d399; --orange: #fb923c; --red: #ef4444;
+    --radius: 10px;
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ── Header ── */
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 14px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  header h1 { font-size: 15px; font-weight: 700; color: var(--accent); }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 6px #10b981; flex-shrink: 0; }
+  .status-dot.offline { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+  .thread-label { margin-left: auto; font-size: 11px; color: var(--muted); display: none; }
+  .hamburger { display: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 20px; padding: 4px 6px; border-radius: 6px; line-height: 1; flex-shrink: 0; }
+  .hamburger:active { background: var(--surface2); }
+  /* show recipient summary in header on mobile */
+  .header-rcpt { display: none; flex: 1; font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .header-rcpt .r-to { color: var(--accent); font-weight: 600; }
+  .header-rcpt .r-cc { color: var(--green); font-weight: 600; }
+
+  /* ── Layout ── */
+  .layout { display: flex; flex: 1; min-height: 0; position: relative; }
+
+  /* ── Sidebar overlay (mobile) ── */
+  .sidebar-overlay { display: none; position: fixed; inset: 0; background: #00000066; z-index: 40; }
+  .sidebar-overlay.open { display: block; }
+
+  /* ── Sidebar ── */
+  aside {
+    width: 260px; min-width: 220px; background: var(--surface);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    overflow: hidden; flex-shrink: 0; transition: transform .25s ease;
+  }
+
+  /* ── Project bar ── */
+  .project-bar { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .project-bar-top { display: flex; align-items: center; gap: 6px; }
+  .project-label { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+  .project-name { font-size: 13px; font-weight: 700; color: var(--accent); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .icon-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 4px 6px; border-radius: 4px; line-height: 1; transition: color .12s; flex-shrink: 0; min-width: 30px; min-height: 30px; display: flex; align-items: center; justify-content: center; }
+  .icon-btn:hover, .icon-btn:active { color: var(--text); background: var(--surface2); }
+  .project-dropdown { margin-top: 8px; display: none; flex-direction: column; gap: 3px; }
+  .project-dropdown.open { display: flex; }
+  .proj-item { font-size: 13px; padding: 7px 8px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 6px; color: var(--muted); transition: all .12s; }
+  .proj-item:active { background: var(--surface2); color: var(--text); }
+  .proj-item.active { color: var(--accent); font-weight: 600; }
+  .proj-item .proj-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .proj-item.active .proj-dot { background: var(--accent); }
+  .proj-item .proj-name-text { flex: 1; }
+  .proj-del-btn { background: none; border: none; color: transparent; cursor: pointer; font-size: 13px; padding: 3px 5px; border-radius: 4px; line-height: 1; transition: color .12s, background .12s; flex-shrink: 0; }
+  .proj-item:hover .proj-del-btn, .proj-item:active .proj-del-btn { color: var(--muted); }
+  .proj-del-btn:hover, .proj-del-btn:active { color: var(--red) !important; background: #3a000033; }
+  /* danger zone */
+  .danger-zone { padding: 8px 12px 10px; border-top: 1px solid var(--border); margin-top: auto; flex-shrink: 0; }
+  .danger-btn { width: 100%; padding: 7px 0; background: none; border: 1px solid #4a1010; color: #f87171; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; }
+  .danger-btn:hover, .danger-btn:active { background: #3a0e0e; border-color: var(--red); }
+  .new-proj-form { margin-top: 6px; display: none; flex-direction: column; gap: 8px; }
+  .new-proj-form.open { display: flex; }
+  .new-proj-form input { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--text); font-size: 14px; }
+  .new-proj-form input:focus { outline: none; border-color: var(--accent); }
+  .new-proj-form .form-btns { display: flex; gap: 6px; }
+  .form-btn { flex: 1; padding: 8px 0; border-radius: 6px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity .12s; }
+  .form-btn.confirm { background: var(--accent); color: #fff; }
+  .form-btn.cancel  { background: var(--surface2); color: var(--muted); }
+  .form-btn:active { opacity: .75; }
+
+  /* ── Agent section header ── */
+  .section-header { display: flex; align-items: center; padding: 10px 14px 4px; }
+  .section-header h2 { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); flex: 1; }
+  .add-agent-btn { font-size: 18px; color: var(--muted); background: none; border: none; cursor: pointer; padding: 4px 6px; border-radius: 4px; line-height: 1; min-width: 30px; min-height: 30px; display: flex; align-items: center; justify-content: center; }
+  .add-agent-btn:hover, .add-agent-btn:active { color: var(--green); background: var(--surface2); }
+
+  /* ── Agent list ── */
+  .agent-list { flex: 1; overflow-y: auto; padding: 0 10px 6px; -webkit-overflow-scrolling: touch; }
+  .agent-card { border-radius: var(--radius); padding: 10px 12px; margin-bottom: 6px; border: 1px solid transparent; transition: all .15s; position: relative; }
+  .agent-card:hover  { border-color: var(--border); background: var(--surface2); }
+  .agent-card.to     { border-color: var(--accent); background: #1a1e3a; }
+  .agent-card.cc     { border-color: var(--green);  background: #10231d; }
+  .agent-card.temp .agent-name::after { content: '临时'; font-size: 9px; background: #7c3aed33; color: var(--accent2); border: 1px solid var(--accent2); border-radius: 3px; padding: 0 4px; margin-left: 5px; vertical-align: middle; }
+  .agent-card.orchestrator-card .agent-name::before { content: '⚙'; font-size: 11px; margin-right: 4px; color: var(--orange); }
+  .agent-card.typing .agent-name .dot { animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .agent-name { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 5px; }
+  .agent-name .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .agent-desc { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+  .cap-tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 5px; }
+  .cap-tag { font-size: 9px; padding: 2px 6px; border-radius: 20px; background: #1e2a4a; color: #818cf8; border: 1px solid #2d3a6a; }
+  .role-row { display: flex; gap: 5px; margin-top: 8px; }
+  .role-btn { flex: 1; font-size: 12px; font-weight: 600; padding: 6px 0; border-radius: 6px; border: 1px solid transparent; cursor: pointer; text-align: center; transition: all .12s; background: transparent; color: var(--muted); min-height: 34px; }
+  .role-btn:active { background: var(--surface2); color: var(--text); }
+  .role-btn.active-to { background: #1e3060; border-color: var(--accent); color: var(--accent); }
+  .role-btn.active-cc { background: #0e2b1e; border-color: var(--green);  color: var(--green); }
+  /* dismiss always visible on touch devices */
+  .dismiss-btn { position: absolute; top: 8px; right: 10px; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; opacity: 0; transition: opacity .15s, color .12s; line-height: 1; padding: 4px; min-width: 28px; min-height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+  .agent-card:hover .dismiss-btn { opacity: 1; }
+  .dismiss-btn:hover, .dismiss-btn:active { color: var(--red); background: #3a0000; opacity: 1 !important; }
+  .role-hint { font-size: 10px; color: var(--muted); padding: 2px 12px 10px; line-height: 1.6; }
+
+  /* ── Add agent modal ── */
+  .modal-backdrop { position: fixed; inset: 0; background: #00000088; z-index: 100; display: none; align-items: flex-end; justify-content: center; }
+  .modal-backdrop.open { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px 14px 0 0; padding: 20px 20px 30px; width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 13px; max-height: 92dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .modal-handle { width: 36px; height: 4px; background: var(--border); border-radius: 2px; margin: 0 auto -4px; }
+  .modal h3 { font-size: 16px; color: var(--accent); }
+  .modal label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+  .modal input, .modal textarea, .modal select { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text); font-size: 15px; font-family: inherit; }
+  .modal input:focus, .modal textarea:focus { outline: none; border-color: var(--accent); }
+  .modal textarea { resize: vertical; min-height: 100px; }
+  .modal-btns { display: flex; gap: 10px; }
+  .modal-btns button { flex: 1; padding: 12px 0; border-radius: 10px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .modal-btns .ok  { background: var(--accent); color: #fff; }
+  .modal-btns .no  { background: var(--surface2); color: var(--muted); }
+  .modal-btns button:active { opacity: .75; }
+
+  /* ── Message area ── */
+  .msg-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .msg-list { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; -webkit-overflow-scrolling: touch; }
+  .msg-wrap { display: flex; flex-direction: column; max-width: 90%; }
+  .msg-wrap.user  { align-self: flex-end;  align-items: flex-end; }
+  .msg-wrap.agent { align-self: flex-start; align-items: flex-start; }
+  .msg-meta { font-size: 11px; color: var(--muted); margin-bottom: 3px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  .msg-meta .sender { font-weight: 600; }
+  .msg-tags { display: flex; gap: 3px; flex-wrap: wrap; }
+  .tag { font-size: 10px; padding: 1px 6px; border-radius: 20px; font-weight: 500; }
+  .tag.to { background: #1e3a5f; color: #60a5fa; }
+  .tag.cc { background: #1a2e23; color: #34d399; }
+  .tag.auto { background: #2a1f40; color: var(--accent2); }
+  .tag.temp-tag { background: #2a1840; color: var(--accent2); border: 1px solid var(--accent2); }
+  .bubble { padding: 9px 13px; border-radius: var(--radius); font-size: 14px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+  .msg-wrap.user  .bubble { background: var(--user); color: #fff; border-bottom-right-radius: 3px; }
+  .msg-wrap.agent .bubble { background: var(--surface2); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+  .msg-wrap.temp-agent .bubble { border-color: var(--accent2); background: #1a1230; }
+  .bubble.streaming::after { content: '▋'; animation: blink .7s infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  /* ── System / tool result messages ── */
+  .sys-msg { align-self: center; background: #0f1822; border: 1px solid #1e3a5a; border-radius: 8px; padding: 6px 14px; font-size: 12px; color: #60a5fa; max-width: 88%; text-align: center; }
+  .tool-result-msg { align-self: center; background: #1a2210; border: 1px solid #2d4a1a; border-radius: 8px; padding: 6px 14px; font-size: 12px; color: var(--green); max-width: 90%; }
+  .escalation-msg { align-self: center; background: #2a1a10; border: 1px solid #5a3a1a; border-radius: 8px; padding: 6px 14px; font-size: 12px; color: var(--orange); max-width: 90%; }
+
+  /* ── Composer ── */
+  .composer { border-top: 1px solid var(--border); padding: 10px 14px; background: var(--surface); display: flex; flex-direction: column; gap: 7px; flex-shrink: 0; }
+  .recipients-summary { font-size: 12px; color: var(--muted); min-height: 16px; }
+  .recipients-summary .r-to { color: var(--accent); font-weight: 600; }
+  .recipients-summary .r-cc { color: var(--green);  font-weight: 600; }
+  .compose-row { display: flex; gap: 8px; align-items: flex-end; }
+  textarea.body { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 12px; color: var(--text); font-size: 14px; resize: none; max-height: 120px; min-height: 42px; font-family: inherit; line-height: 1.5; overflow-y: auto; }
+  textarea.body:focus { outline: none; border-color: var(--accent); }
+  .send-btn { padding: 0; background: var(--accent); color: #fff; border: none; border-radius: var(--radius); font-size: 20px; font-weight: 600; cursor: pointer; transition: opacity .15s; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .send-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .send-btn:active:not(:disabled) { opacity: .75; }
+  .hint { font-size: 11px; color: var(--muted); }
+  .hint kbd { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-size: 10px; }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #1e293b; border: 1px solid var(--border); color: var(--text); padding: 9px 20px; border-radius: 20px; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 999; white-space: nowrap; }
+  .toast.show { opacity: 1; }
+
+  /* ── Process bubble (thinking + tool calls before final reply) ── */
+  .proc-wrap { align-self: flex-start; max-width: 90%; margin-bottom: 4px; }
+  .proc-bubble { background: #0d1220; border: 1px solid #1e2d45; border-radius: var(--radius); padding: 8px 0 4px; }
+  .proc-header { display: flex; align-items: center; gap: 8px; padding: 0 12px 6px; border-bottom: 1px solid #1a2535; }
+  .proc-sender { font-size: 13px; font-weight: 600; }
+  .proc-badge { font-size: 10px; background: #1e2d1e; color: var(--green); border: 1px solid #2d4a2d; border-radius: 10px; padding: 1px 7px; display: flex; align-items: center; gap: 4px; }
+  .proc-badge-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); animation: livePulse 1s infinite; }
+  .proc-stat { font-size: 11px; color: var(--muted); margin-left: auto; }
+  .proc-stat .val { color: var(--accent2); font-weight: 600; }
+  .proc-items { display: flex; flex-direction: column; }
+  .proc-item { border-bottom: 1px solid #151e2e; }
+  .proc-item:last-child { border-bottom: none; }
+  .proc-item-header { display: flex; align-items: center; gap: 7px; padding: 6px 12px; cursor: pointer; user-select: none; font-size: 12px; color: var(--muted); transition: background .1s; }
+  .proc-item-header:hover { background: #111827; }
+  .proc-item-icon { font-size: 13px; flex-shrink: 0; }
+  .proc-item-label { flex: 1; }
+  .proc-item-chars { font-size: 10px; opacity: .7; }
+  .proc-item-chev { font-size: 10px; transition: transform .2s; margin-left: 4px; }
+  .proc-item.open .proc-item-chev { transform: rotate(180deg); }
+  .proc-item-body { display: none; padding: 6px 12px 8px 32px; font-size: 11px; color: #8b7db8; white-space: pre-wrap; word-break: break-word; line-height: 1.65; max-height: 240px; overflow-y: auto; background: #090d18; }
+  .proc-item.open .proc-item-body { display: block; }
+  .proc-item.reasoning .proc-item-header { color: var(--accent2); }
+  .proc-item.reasoning .proc-item-icon { color: var(--accent2); }
+  /* finalized proc bubble */
+  .proc-bubble.done .proc-badge { background: #0d1f12; border-color: #1d3d22; color: #6ee7a0; animation: none; }
+  .proc-bubble.done .proc-badge-dot { display: none; }
+
+  /* ── Checkpoint list ─────────────────────────────────────────────────── */
+  .chk-section { padding: 4px 8px 8px; }
+  .chk-list { display: flex; flex-direction: column; gap: 3px; }
+  .chk-item { display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: #0a1220; border: 1px solid #1a2535; border-radius: 7px; font-size: 11px; }
+  .chk-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent2); flex-shrink: 0; }
+  .chk-note { flex: 1; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chk-time { color: var(--muted); font-size: 10px; flex-shrink: 0; }
+  .chk-actions { display: flex; gap: 3px; }
+  .chk-btn { background: none; border: 1px solid #2a3a4a; border-radius: 5px; color: var(--muted); padding: 1px 6px; font-size: 10px; cursor: pointer; transition: all .15s; }
+  .chk-btn:hover { background: #1a2535; color: var(--fg); }
+  .chk-restore-btn { color: var(--accent2); border-color: #2d3a5a; }
+  .chk-restore-btn:hover { background: #1a2040; color: var(--accent2); }
+  .chk-add-btn { display: flex; align-items: center; gap: 4px; background: none; border: 1px dashed #2a3a4a; border-radius: 7px; padding: 4px 8px; font-size: 11px; color: var(--muted); cursor: pointer; width: 100%; margin-top: 3px; transition: all .15s; }
+  .chk-add-btn:hover { border-color: var(--accent2); color: var(--accent2); background: #0d1530; }
+  /* Restore confirmation modal */
+  .restore-modal { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+  .restore-modal-box { background: #0c1828; border: 1px solid #2a3a5a; border-radius: 12px; padding: 24px; max-width: 440px; width: 90%; }
+  .restore-modal-title { font-size: 15px; font-weight: 600; margin-bottom: 10px; color: var(--fg); }
+  .restore-modal-hint { font-size: 12px; color: var(--muted); margin-bottom: 14px; line-height: 1.6; white-space: pre-wrap; }
+  .restore-modal-ctx { background: #090e1a; border: 1px solid #2d1a1a; border-radius: 7px; padding: 10px; font-size: 11px; color: #e9897a; margin-bottom: 14px; max-height: 120px; overflow-y: auto; }
+  .restore-modal-opts { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; font-size: 12px; color: var(--muted); }
+  .restore-modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .restore-cancel-btn { background: none; border: 1px solid #2a3a5a; border-radius: 7px; padding: 7px 18px; color: var(--muted); cursor: pointer; }
+  .restore-confirm-btn { background: var(--accent2); border: none; border-radius: 7px; padding: 7px 18px; color: #0c1828; font-weight: 700; cursor: pointer; }
+  /* Pin icon on user message bubbles */
+  .msg-pin-btn { position: absolute; bottom: 4px; right: 6px; background: none; border: none; font-size: 12px; color: var(--muted); cursor: pointer; opacity: 0; transition: opacity .15s; padding: 2px 3px; line-height: 1; }
+  .msg-wrap:hover .msg-pin-btn { opacity: .7; }
+  .msg-pin-btn:hover { opacity: 1 !important; color: var(--accent2); }
+
+  /* ── Tool-call fold section (in finalized message bubbles) ── */
+  .tool-calls-fold { margin-bottom: 5px; border: 1px solid #1e2d40; border-radius: 8px; overflow: hidden; cursor: pointer; user-select: none; }
+  .tc-fold-label { display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 11px; color: #60a5fa; background: #0d1520; }
+  .tc-fold-chev { margin-left: auto; font-size: 10px; transition: transform .2s; }
+  .tool-calls-fold.open .tc-fold-chev { transform: rotate(180deg); }
+  .tc-fold-body { display: none; padding: 8px 10px; background: #090e18; }
+  .tool-calls-fold.open .tc-fold-body { display: block; }
+  .tc-pre { font-size: 10px; color: #94a3b8; white-space: pre-wrap; word-break: break-all; margin: 0; line-height: 1.6; font-family: 'Consolas', monospace; }
+
+  /* ── Streaming activity panel ── */
+  .stream-meta-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .stream-live-badge { font-size: 10px; background: #1e2d1e; color: var(--green); border: 1px solid #2d4a2d; border-radius: 10px; padding: 1px 7px; display: flex; align-items: center; gap: 4px; }
+  .stream-live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); animation: livePulse 1s infinite; }
+  @keyframes livePulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .stream-stat { font-size: 11px; color: var(--muted); }
+  .stream-stat .val { color: var(--accent); font-weight: 600; }
+
+  /* ── Thinking section ── */
+  .stream-think { margin: 5px 0 4px; border: 1px solid #2d2845; border-radius: 8px; overflow: hidden; display: none; }
+  .stream-think.visible { display: block; }
+  .stream-think-toggle { display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 11px; color: var(--accent2); cursor: pointer; background: #160f2a; user-select: none; border: none; width: 100%; text-align: left; }
+  .stream-think-toggle:hover { background: #1e1538; }
+  .think-chevron { margin-left: auto; font-size: 10px; transition: transform .2s; }
+  .stream-think.collapsed .think-chevron { transform: rotate(-90deg); }
+  .stream-think-body { padding: 8px 10px; font-size: 11px; color: #8b7db8; white-space: pre-wrap; word-break: break-word; line-height: 1.65; max-height: 220px; overflow-y: auto; background: #0e0b1a; }
+  .stream-think.collapsed .stream-think-body { display: none; }
+
+  /* ── Activity log (tool calls / escalations during stream) ── */
+  .stream-activity { display: flex; flex-direction: column; gap: 3px; margin: 4px 0 2px; }
+  .act-card { display: flex; align-items: flex-start; gap: 7px; padding: 5px 9px; border-radius: 7px; font-size: 11px; line-height: 1.5; }
+  .act-card.tool  { background: #0d1f12; border: 1px solid #1d3d22; color: #6ee7a0; }
+  .act-card.esc   { background: #1f150a; border: 1px solid #3d2710; color: var(--orange); }
+  .act-card.info  { background: #0d1320; border: 1px solid #1d2d40; color: #60a5fa; }
+  .act-card-icon  { flex-shrink: 0; font-size: 13px; line-height: 1.3; }
+  .act-card-body  { flex: 1; min-width: 0; }
+  .act-card-title { font-weight: 600; }
+  .act-card-sub   { color: inherit; opacity: .75; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── Image handling ── */
+  .img-previews { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 4px; }
+  .img-preview-wrap { position: relative; display: inline-block; }
+  .img-preview-wrap img { width: 60px; height: 60px; object-fit: cover; border-radius: 7px; border: 1px solid var(--border); display: block; }
+  .img-preview-wrap .rm-img { position: absolute; top: -5px; right: -5px; width: 18px; height: 18px; border-radius: 50%; background: #ef4444; color: #fff; border: none; font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; padding: 0; }
+  .attach-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 20px; padding: 4px 6px; border-radius: 6px; line-height: 1; flex-shrink: 0; align-self: flex-end; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center; }
+  .attach-btn:hover, .attach-btn:active { color: var(--accent); background: var(--surface2); }
+  /* image bubbles in chat */
+  .bubble-imgs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .bubble-imgs img { max-width: 200px; max-height: 200px; border-radius: 8px; cursor: pointer; object-fit: cover; border: 1px solid var(--border); }
+  @media (max-width: 640px) { .bubble-imgs img { max-width: 140px; max-height: 140px; } }
+
+  /* ═══════════════════════════════════════
+     MOBILE  ( ≤ 640px )
+  ═══════════════════════════════════════ */
+  @media (max-width: 640px) {
+    /* header */
+    .hamburger { display: flex; }
+    .thread-label { display: none !important; }
+    .header-rcpt { display: block; }
+
+    /* sidebar becomes a fixed drawer */
+    aside {
+      position: fixed; top: 0; left: 0; bottom: 0; z-index: 50;
+      width: 82vw; max-width: 320px;
+      transform: translateX(-105%);
+      box-shadow: 4px 0 24px #00000080;
+      border-right: 1px solid var(--border);
+    }
+    aside.open { transform: translateX(0); }
+
+    /* close sidebar btn inside aside */
+    .sidebar-close { display: flex !important; }
+
+    /* message area takes full width */
+    .msg-area { width: 100%; }
+    .msg-wrap { max-width: 94%; }
+
+    /* dismiss btn always visible on mobile */
+    .dismiss-btn { opacity: 0.55 !important; }
+
+    /* bigger touch targets */
+    .role-btn { min-height: 38px; font-size: 13px; }
+    .proj-item { padding: 10px 12px; font-size: 14px; }
+
+    /* composer row */
+    .hint { display: none; }
+    .recipients-summary { display: none; }
+    textarea.body { font-size: 15px; }
+
+    /* modal bottom sheet */
+    .modal { border-radius: 18px 18px 0 0; }
+    .modal input, .modal textarea, .modal select { font-size: 16px; } /* prevent iOS zoom */
+
+    /* sys / tool msgs wider */
+    .sys-msg, .tool-result-msg, .escalation-msg { max-width: 96%; font-size: 11px; }
+  }
+
+  /* always-hidden element shown only on mobile */
+  .sidebar-close { display: none; background: none; border: none; color: var(--muted); font-size: 22px; padding: 8px 12px; cursor: pointer; align-self: flex-end; margin-bottom: -6px; }
+
+  /* ── Conversation list ── */
+  .conv-section { border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .conv-list { max-height: 190px; overflow-y: auto; padding: 0 10px 6px; }
+  .conv-item { display: flex; align-items: center; gap: 5px; padding: 6px 8px; border-radius: 7px; cursor: pointer; border: 1px solid transparent; transition: all .12s; margin-bottom: 3px; }
+  .conv-item:hover { background: var(--surface2); border-color: var(--border); }
+  .conv-item.active { background: #1a1e3a; border-color: var(--accent); }
+  .conv-item-body { flex: 1; min-width: 0; }
+  .conv-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv-item.active .conv-name { color: var(--accent); }
+  .conv-time { font-size: 10px; color: var(--muted); margin-top: 1px; }
+  .conv-actions { display: flex; gap: 2px; opacity: 0; transition: opacity .12s; flex-shrink: 0; }
+  .conv-item:hover .conv-actions { opacity: 1; }
+  .conv-act-btn { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 3px 5px; border-radius: 4px; line-height: 1; }
+  .conv-act-btn:hover { color: var(--text); background: var(--surface2); }
+  .conv-act-btn.del:hover { color: var(--red); background: #3a000033; }
+  .conv-empty { font-size: 12px; color: var(--muted); padding: 6px 4px; }
+  .conv-ctx-badge { display: none; align-self: center; font-size: 10px; background: #1e2d1e; color: var(--green); border: 1px solid #2d4a2d; border-radius: 10px; padding: 2px 8px; margin: 4px 10px; cursor: pointer; }
+  .conv-ctx-badge.show { display: block; }
+</style>
+</head>
+<body>
+
+<header>
+  <button class="hamburger" onclick="toggleSidebar()" aria-label="打开菜单">☰</button>
+  <div class="status-dot offline" id="statusDot"></div>
+  <h1>Agent Platform</h1>
+  <div class="header-rcpt" id="headerRcpt"></div>
+  <div class="thread-label" id="threadLabel">Thread: —</div>
+</header>
+
+<div class="layout">
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar(false)"></div>
+  <aside id="sidebar">
+    <!-- Project bar -->
+    <div class="project-bar">
+      <div class="project-bar-top">
+        <div>
+          <div class="project-label">项目</div>
+          <div class="project-name" id="projectName">—</div>
+        </div>
+        <button class="icon-btn" title="切换项目" onclick="toggleProjectDropdown()">⌄</button>
+        <button class="icon-btn" title="新建项目" onclick="toggleNewForm()">＋</button>
+      </div>
+      <div class="project-dropdown" id="projectDropdown"></div>
+      <div class="new-proj-form" id="newProjForm">
+        <input id="newProjName" placeholder="项目名（字母/数字/_-）" maxlength="40"
+               onkeydown="if(event.key==='Enter')confirmNewProject()">
+        <div class="form-btns">
+          <button class="form-btn confirm" onclick="confirmNewProject()">创建并切换</button>
+          <button class="form-btn cancel"  onclick="toggleNewForm(false)">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mobile close btn -->
+    <button class="sidebar-close" onclick="toggleSidebar(false)">✕</button>
+
+    <!-- Conversation section -->
+    <div class="conv-section">
+      <div class="section-header">
+        <h2>对话</h2>
+        <button class="add-agent-btn" title="新建对话" onclick="newConversation()">＋</button>
+      </div>
+      <div class="conv-list" id="convList">
+        <div class="conv-empty">连接中…</div>
+      </div>
+    </div>
+
+    <!-- Context-updated badge (dismissible) -->
+    <div class="conv-ctx-badge" id="ctxBadge" onclick="dismissCtxBadge()">📋 团队背景已更新</div>
+
+    <!-- Agent section -->
+    <div class="section-header">
+      <h2>团队成员</h2>
+      <button class="add-agent-btn" title="手动添加成员" onclick="openAddAgentModal()">＋</button>
+    </div>
+    <div class="agent-list" id="agentList">
+      <div style="color:var(--muted);font-size:12px;padding:8px 4px;">连接中…</div>
+    </div>
+    <div class="role-hint">
+      点 <b style="color:var(--accent)">To</b> 主收件 · 点 <b style="color:var(--green)">CC</b> 抄送<br>
+      再次点击同一按钮取消选择
+    </div>
+    <div class="danger-zone">
+      <button class="danger-btn" onclick="deleteCurrentProject()">解散当前团队</button>
+    </div>
+  </aside>
+
+  <!-- Message area -->
+  <div class="msg-area">
+    <div class="msg-list" id="msgList">
+      <div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">
+        从左侧选择 Agent 开始对话
+      </div>
+    </div>
+    <div class="composer">
+      <div class="recipients-summary" id="recipientSummary">尚未选择收件人</div>
+      <div class="img-previews" id="imgPreviews"></div>
+      <div class="compose-row">
+        <button class="attach-btn" title="上传图片" onclick="el('fileInput').click()">📎</button>
+        <textarea class="body" id="bodyField" placeholder="写下消息…" rows="2"></textarea>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="发送 (Ctrl+Enter)">➤</button>
+      </div>
+      <span class="hint">按 <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 发送 · 可粘贴图片</span>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" multiple style="display:none" onchange="handleFileInput(event)">
+  </div>
+</div>
+
+<!-- Add Agent Modal -->
+<div class="modal-backdrop" id="addAgentModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>添加成员</h3>
+    <div>
+      <label>名称（snake_case）</label>
+      <input id="ma-name" placeholder="e.g. travel_expert">
+    </div>
+    <div>
+      <label>描述</label>
+      <input id="ma-desc" placeholder="一句话简介">
+    </div>
+    <div>
+      <label>能力标签（逗号分隔）</label>
+      <input id="ma-caps" placeholder="e.g. travel_planning, itinerary">
+    </div>
+    <div>
+      <label>角色</label>
+      <select id="ma-role">
+        <option value="member">member</option>
+        <option value="orchestrator">orchestrator</option>
+      </select>
+    </div>
+    <div>
+      <label>指令（系统提示词）</label>
+      <textarea id="ma-instr" placeholder="你是一个专业的…"></textarea>
+    </div>
+    <div class="modal-btns">
+      <button class="no"  onclick="closeAddAgentModal()">取消</button>
+      <button class="ok"  onclick="submitAddAgent()">创建成员</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────────────
+const COLORS = ['#6c7eff','#34d399','#f472b6','#fb923c','#a78bfa','#38bdf8','#facc15','#4ade80'];
+let colorMap = {}, colorIdx = 0;
+
+// ── State ───────────────────────────────────────────────────────────────────
+let ws = null;
+let streamingBubbles = {};
+let selection = {};       // agentName → 'to'|'cc'|null
+let allAgents = [];       // [{name, description, role, capabilities, is_temp}]
+let allProjects = [];
+let currentProject = '';
+let tempAgentNames = new Set();
+let pendingImages = [];   // {dataUri, objectUrl} — images queued for next send
+
+// Stable thread_id per project, persisted in localStorage
+function getThreadId(project) {
+  const key = `thread_id::${project}`;
+  let tid = localStorage.getItem(key);
+  if (!tid) { tid = 'main-' + Math.random().toString(36).slice(2, 7); localStorage.setItem(key, tid); }
+  return tid;
+}
+// Will be set properly after first init event (we know project name then)
+let THREAD_ID = localStorage.getItem('thread_id::__last__') || ('main-' + Math.random().toString(36).slice(2, 7));
+let WS_URL = `ws://${location.host}/ws/${THREAD_ID}`;
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+const el = id => document.getElementById(id);
+function color(name) {
+  if (!colorMap[name]) colorMap[name] = COLORS[colorIdx++ % COLORS.length];
+  return colorMap[name];
+}
+function escHtml(s) {
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function showToast(msg, ms=2500) {
+  const t = el('toast'); t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), ms);
+}
+function scrollBottom() { el('msgList').scrollTop = el('msgList').scrollHeight; }
+
+// ── Thread management ────────────────────────────────────────────────────────
+function _reconnectForProject(name) {
+  THREAD_ID = getThreadId(name);
+  localStorage.setItem('thread_id::__last__', THREAD_ID);
+  WS_URL = `ws://${location.host}/ws/${THREAD_ID}`;
+  el('threadLabel').textContent = 'Thread: ' + THREAD_ID;
+  if (ws) { _intentionalClose = true; ws.close(); }
+  fetchConversations();
+}
+
+// ── Conversation management ───────────────────────────────────────────────────
+let allConversations = [];
+
+async function fetchConversations() {
+  try {
+    const res = await fetch('/api/conversations');
+    if (!res.ok) return;
+    const data = await res.json();
+    allConversations = data.conversations || [];
+    renderConversations(allConversations);
+  } catch (e) { /* ignore */ }
+}
+
+function _relativeTime(isoStr) {
+  if (!isoStr) return '';
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return `${m}分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}小时前`;
+  return `${Math.floor(h/24)}天前`;
+}
+
+function renderConversations(convs) {
+  const list = el('convList');
+  if (!convs.length) {
+    list.innerHTML = '<div class="conv-empty">暂无对话，点击 ＋ 新建</div>';
+    return;
+  }
+  list.innerHTML = convs.map(c => {
+    const active = c.thread_id === THREAD_ID ? 'active' : '';
+    const time = _relativeTime(c.last_active);
+    return `
+      <div class="conv-item ${active}" onclick="switchConversation('${c.thread_id}')">
+        <div class="conv-item-body">
+          <div class="conv-name" id="cname-${c.thread_id}">${escHtml(c.name)}</div>
+          <div class="conv-time">${time}</div>
+        </div>
+        <div class="conv-actions">
+          <button class="conv-act-btn" title="检查点" onclick="toggleCheckpoints('${c.thread_id}',event)">📌</button>
+          <button class="conv-act-btn" title="重命名" onclick="renameConversation('${c.thread_id}','${escHtml(c.name)}',event)">✎</button>
+          <button class="conv-act-btn del" title="删除" onclick="deleteConversation('${c.thread_id}',event)">✕</button>
+        </div>
+      </div>
+      <div class="chk-section" id="chklist-wrap-${c.thread_id}" style="display:none">
+        <div class="chk-list" id="chklist-${c.thread_id}"></div>
+        <button class="chk-add-btn" onclick="createCheckpoint('${c.thread_id}',event)">＋ 创建检查点</button>
+      </div>`;
+  }).join('');
+}
+
+async function newConversation() {
+  const res = await fetch('/api/conversations', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({name: ''})
+  });
+  if (!res.ok) { showToast('❌ 新建失败'); return; }
+  const data = await res.json();
+  const conv = data.conversation;
+  allConversations.unshift(conv);
+  await switchConversation(conv.thread_id);
+}
+
+async function switchConversation(thread_id) {
+  if (thread_id === THREAD_ID) return;
+  // Persist the thread_id choice for this project
+  localStorage.setItem(`thread_id::${currentProject}`, thread_id);
+  THREAD_ID = thread_id;
+  WS_URL = `ws://${location.host}/ws/${THREAD_ID}`;
+  el('threadLabel').textContent = 'Thread: ' + THREAD_ID;
+  el('msgList').innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">载入对话中…</div>';
+  renderConversations(allConversations);
+  if (ws) { _intentionalClose = true; ws.close(); } // reconnects immediately via onclose
+}
+
+async function deleteConversation(thread_id, evt) {
+  if (evt) evt.stopPropagation();
+  if (!confirm('确定删除这条对话？此操作不可撤销。')) return;
+  const res = await fetch(`/api/conversations/${encodeURIComponent(thread_id)}`, { method: 'DELETE' });
+  if (!res.ok) { showToast('❌ 删除失败'); return; }
+  allConversations = allConversations.filter(c => c.thread_id !== thread_id);
+  showToast('对话已删除');
+  // If deleted the active one, switch to first remaining
+  if (thread_id === THREAD_ID) {
+    if (allConversations.length) {
+      await switchConversation(allConversations[0].thread_id);
+    } else {
+      await newConversation();
+    }
+  } else {
+    renderConversations(allConversations);
+  }
+}
+
+async function renameConversation(thread_id, oldName, evt) {
+  if (evt) evt.stopPropagation();
+  const newName = prompt('重命名对话：', oldName);
+  if (!newName || newName.trim() === oldName) return;
+  const res = await fetch(`/api/conversations/${encodeURIComponent(thread_id)}/name`, {
+    method: 'PATCH',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({name: newName.trim()})
+  });
+  if (!res.ok) { showToast('❌ 重命名失败'); return; }
+  const conv = allConversations.find(c => c.thread_id === thread_id);
+  if (conv) conv.name = newName.trim();
+  renderConversations(allConversations);
+  showToast('已重命名');
+}
+
+// ── Checkpoint UI ────────────────────────────────────────────────────────────
+let _expandedChkThread = null;
+
+async function toggleCheckpoints(thread_id, evt) {
+  if (evt) evt.stopPropagation();
+  const wrap = document.getElementById('chklist-wrap-' + thread_id);
+  if (!wrap) return;
+  if (_expandedChkThread && _expandedChkThread !== thread_id) {
+    const prev = document.getElementById('chklist-wrap-' + _expandedChkThread);
+    if (prev) prev.style.display = 'none';
+  }
+  if (wrap.style.display === 'none') {
+    wrap.style.display = 'block';
+    _expandedChkThread = thread_id;
+    await fetchCheckpoints(thread_id);
+  } else {
+    wrap.style.display = 'none';
+    _expandedChkThread = null;
+  }
+}
+
+async function fetchCheckpoints(thread_id) {
+  const res = await fetch(`/api/checkpoints?thread_id=${encodeURIComponent(thread_id)}`);
+  if (!res.ok) return;
+  const chks = await res.json();
+  renderCheckpoints(thread_id, chks);
+}
+
+function renderCheckpoints(thread_id, checkpoints) {
+  const list = document.getElementById('chklist-' + thread_id);
+  if (!list) return;
+  if (!checkpoints.length) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--muted);padding:4px 2px">暂无检查点</div>';
+    return;
+  }
+  list.innerHTML = checkpoints.map(c => {
+    const t = _relativeTime(c.created_at);
+    return `<div class="chk-item" id="chkitem-${c.id}">
+      <span class="chk-dot"></span>
+      <span class="chk-note" title="${escHtml(c.note)}">${escHtml(c.note)}</span>
+      <span class="chk-time">${t}</span>
+      <span class="chk-actions">
+        <button class="chk-btn chk-restore-btn" onclick="restoreCheckpoint('${c.id}','${escHtml(c.note)}','${c.thread_id}',event)">回滚</button>
+        <button class="chk-btn" onclick="deleteCheckpoint('${c.id}','${c.thread_id}',event)">✕</button>
+      </span>
+    </div>`;
+  }).join('');
+}
+
+async function createCheckpoint(thread_id, evt, anchorMessageId = null) {
+  if (evt) evt.stopPropagation();
+  const note = prompt('检查点备注（可选）：', '') ;
+  if (note === null) return;  // user pressed cancel
+  const payload = { thread_id, note: note.trim() || '检查点' };
+  if (anchorMessageId) payload.anchor_message_id = anchorMessageId;
+  const res = await fetch('/api/checkpoints', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) { showToast('❌ 创建失败'); return; }
+  showToast(anchorMessageId ? '📌 锚点检查点已创建' : '📌 检查点已创建');
+  await fetchCheckpoints(thread_id);
+}
+
+async function deleteCheckpoint(id, thread_id, evt) {
+  if (evt) evt.stopPropagation();
+  if (!confirm('确定删除此检查点？')) return;
+  const res = await fetch(`/api/checkpoints/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) { showToast('❌ 删除失败'); return; }
+  showToast('已删除检查点');
+  await fetchCheckpoints(thread_id);
+}
+
+async function restoreCheckpoint(id, note, thread_id, evt) {
+  if (evt) evt.stopPropagation();
+
+  // Fetch the checkpoint to get context_diff hint
+  const metaRes = await fetch(`/api/checkpoints?thread_id=${encodeURIComponent(thread_id)}`);
+  const allChks = metaRes.ok ? await metaRes.json() : [];
+  const chk = allChks.find(c => c.id === id);
+
+  // Show confirmation modal
+  return new Promise(resolve => {
+    const modal = document.createElement('div');
+    modal.className = 'restore-modal';
+    modal.innerHTML = `
+      <div class="restore-modal-box">
+        <div class="restore-modal-title">回滚到检查点：${escHtml(note)}</div>
+        <div class="restore-modal-hint">此操作将恢复该对话的聊天记录到检查点状态。\n团队共享的 context.md 默认不会恢复（可勾选下方选项强制恢复）。</div>
+        <div class="restore-modal-ctx" id="restore-ctx-hint" style="display:none"></div>
+        <div class="restore-modal-opts">
+          <input type="checkbox" id="restore-ctx-chk">
+          <label for="restore-ctx-chk">同时恢复 context.md（影响所有对话，谨慎使用）</label>
+        </div>
+        <div class="restore-modal-actions">
+          <button class="restore-cancel-btn" id="restore-cancel">取消</button>
+          <button class="restore-confirm-btn" id="restore-confirm">确认回滚</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    modal.querySelector('#restore-cancel').onclick = () => { modal.remove(); resolve(false); };
+    modal.querySelector('#restore-confirm').onclick = async () => {
+      const restoreCtx = modal.querySelector('#restore-ctx-chk').checked;
+      modal.remove();
+      const res = await fetch(`/api/checkpoints/${encodeURIComponent(id)}/restore`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ restore_context: restoreCtx })
+      });
+      if (!res.ok) { showToast('❌ 回滚失败'); resolve(false); return; }
+      const data = await res.json();
+      if (data.context_hint) showToast('⚠️ ' + data.context_hint.slice(0, 60) + '…');
+      else showToast('✅ 已回滚到检查点');
+      resolve(true);
+    };
+  });
+}
+
+function dismissCtxBadge() {
+  el('ctxBadge').classList.remove('show');
+}
+
+// ── Sidebar (mobile drawer) ──────────────────────────────────────────────────
+function toggleSidebar(force) {
+  const sidebar = el('sidebar');
+  const overlay = el('sidebarOverlay');
+  const open = force !== undefined ? force : !sidebar.classList.contains('open');
+  sidebar.classList.toggle('open', open);
+  overlay.classList.toggle('open', open);
+  // Prevent body scroll when drawer open
+  document.body.style.overflow = open ? 'hidden' : '';
+}
+
+// Close sidebar after selecting an agent on mobile
+function _closeSidebarIfMobile() {
+  if (window.innerWidth <= 640) toggleSidebar(false);
+}
+
+// ── Project management ───────────────────────────────────────────────────────
+async function fetchProjects() {
+  const res = await fetch('/api/projects');
+  const data = await res.json();
+  allProjects = data.projects;
+  currentProject = data.current;
+  el('projectName').textContent = currentProject;
+  renderProjectDropdown();
+}
+
+function renderProjectDropdown() {
+  el('projectDropdown').innerHTML = allProjects.map(p => `
+    <div class="proj-item ${p===currentProject?'active':''}">
+      <span class="proj-dot"></span>
+      <span class="proj-name-text" onclick="switchProject('${p}')">${escHtml(p)}</span>
+      <button class="proj-del-btn" title="删除项目" onclick="deleteProject('${p}',event)">✕</button>
+    </div>`).join('');
+}
+
+function toggleProjectDropdown(force) {
+  const dd = el('projectDropdown');
+  const open = force !== undefined ? force : !dd.classList.contains('open');
+  dd.classList.toggle('open', open);
+  if (open) { fetchProjects(); toggleNewForm(false); }
+}
+
+function toggleNewForm(force) {
+  const form = el('newProjForm');
+  const open = force !== undefined ? force : !form.classList.contains('open');
+  form.classList.toggle('open', open);
+  if (open) { toggleProjectDropdown(false); el('newProjName').focus(); }
+  else el('newProjName').value = '';
+}
+
+async function deleteProject(name, evt) {
+  if (evt) evt.stopPropagation();
+  if (!confirm(`确定要删除项目 "${name}" 吗？\n此操作不可撤销，所有数据将被清除。`)) return;
+  toggleProjectDropdown(false);
+  const res = await fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok) { showToast('❌ ' + (data.detail || '删除失败')); return; }
+
+  allProjects = data.projects || [];
+  showToast(`项目 "${name}" 已删除`);
+
+  if (data.switched_to && data.switched_to !== name) {
+    currentProject = data.switched_to;
+    el('projectName').textContent = currentProject;
+    selection = {}; updateRecipientSummary();
+    renderAgents(data.agents || []);
+    el('msgList').innerHTML = `<div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">已切换到项目：${escHtml(currentProject)}</div>`;
+  } else {
+    currentProject = '';
+    el('projectName').textContent = '—';
+    selection = {}; updateRecipientSummary();
+    renderAgents([]);
+    el('msgList').innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">请新建一个项目</div>';
+  }
+  renderProjectDropdown();
+}
+
+async function deleteCurrentProject() {
+  if (!currentProject) { showToast('当前没有活跃项目'); return; }
+  await deleteProject(currentProject, null);
+}
+
+async function switchProject(name) {
+  toggleProjectDropdown(false);
+  if (name === currentProject) return;
+  const res = await fetch(`/api/projects/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+  if (!res.ok) { showToast('切换失败'); return; }
+  currentProject = name;
+  el('projectName').textContent = name;
+  el('msgList').innerHTML = `<div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">已切换到项目：${escHtml(name)}</div>`;
+  selection = {}; updateRecipientSummary();
+  pendingImages = []; renderImagePreviews();
+  renderProjectDropdown();
+  showToast(`已切换到 ${name}`);
+  _reconnectForProject(name);
+}
+
+async function confirmNewProject() {
+  const name = el('newProjName').value.trim();
+  if (!name) return;
+  const res = await fetch('/api/projects', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({name})
+  });
+  const data = await res.json();
+  if (!res.ok) { showToast('❌ ' + (data.detail||'创建失败')); return; }
+  toggleNewForm(false);
+  currentProject = name;
+  el('projectName').textContent = name;
+  el('msgList').innerHTML = `<div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">新项目已创建，和 orchestrator 对话来组建团队</div>`;
+  selection = {}; updateRecipientSummary();
+  pendingImages = []; renderImagePreviews();
+  allProjects.push(name);
+  showToast(`项目 "${name}" 已创建`);
+  _reconnectForProject(name);
+}
+
+// ── Add / dismiss agent ──────────────────────────────────────────────────────
+function openAddAgentModal() {
+  el('addAgentModal').classList.add('open');
+  el('ma-name').focus();
+}
+function closeAddAgentModal() {
+  el('addAgentModal').classList.remove('open');
+  ['ma-name','ma-desc','ma-caps','ma-instr'].forEach(id => el(id).value = '');
+  el('ma-role').value = 'member';
+}
+
+async function submitAddAgent() {
+  const name = el('ma-name').value.trim();
+  if (!name) { showToast('请填写成员名称'); return; }
+  const caps = el('ma-caps').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const body = {
+    name,
+    description: el('ma-desc').value.trim(),
+    capabilities: caps,
+    role: el('ma-role').value,
+    instructions: el('ma-instr').value.trim() || '你是一个专业的助手，请尽力完成分配给你的任务。',
+  };
+  const res = await fetch('/api/agents', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (!res.ok) { showToast('❌ ' + (data.detail||'创建失败')); return; }
+  closeAddAgentModal();
+  renderAgents(data.agents);
+  showToast(`已添加成员 "${name}"`);
+  appendSysMsg(`新成员 ${name} 已加入团队`);
+}
+
+async function dismissAgent(name) {
+  if (!confirm(`确定要解雇成员 "${name}" 吗？`)) return;
+  const res = await fetch(`/api/agents/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok) { showToast('❌ ' + (data.detail||'操作失败')); return; }
+  renderAgents(data.agents);
+  delete selection[name];
+  updateRecipientSummary();
+  showToast(`已解雇 "${name}"`);
+  appendSysMsg(`成员 ${name} 已离开团队`);
+}
+
+// ── Selection ────────────────────────────────────────────────────────────────
+function toggleRole(agentName, role) {
+  selection[agentName] = selection[agentName] === role ? null : role;
+  updateCardUI(agentName);
+  updateRecipientSummary();
+  if (role === 'to') _closeSidebarIfMobile();
+}
+
+function updateCardUI(name) {
+  const card = el('card-' + name);
+  if (!card) return;
+  const role = selection[name];
+  // Preserve extra classes
+  const extras = [];
+  if (card.classList.contains('temp')) extras.push('temp');
+  if (card.classList.contains('orchestrator-card')) extras.push('orchestrator-card');
+  card.className = ['agent-card', ...extras, role || ''].filter(Boolean).join(' ');
+  const btnTo = card.querySelector('.btn-to');
+  const btnCc = card.querySelector('.btn-cc');
+  if (btnTo) btnTo.className = 'role-btn btn-to' + (role === 'to' ? ' active-to' : '');
+  if (btnCc) btnCc.className = 'role-btn btn-cc' + (role === 'cc' ? ' active-cc' : '');
+}
+
+function updateRecipientSummary() {
+  const to = Object.keys(selection).filter(n => selection[n] === 'to');
+  const cc = Object.keys(selection).filter(n => selection[n] === 'cc');
+  const parts = [];
+  if (to.length) parts.push(`<span class="r-to">To: ${to.join(', ')}</span>`);
+  if (cc.length) parts.push(`<span class="r-cc">CC: ${cc.join(', ')}</span>`);
+  const html = parts.length
+    ? parts.join('  ')
+    : '<span style="color:var(--muted)">尚未选择收件人</span>';
+  el('recipientSummary').innerHTML = html;
+  el('headerRcpt').innerHTML = parts.length ? parts.join(' ') : '';
+}
+
+// ── Agent rendering ──────────────────────────────────────────────────────────
+function renderAgents(agents) {
+  allAgents = agents || [];
+  const list = el('agentList');
+  list.innerHTML = '';
+  if (!agents.length) {
+    list.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 4px;">该项目暂无 Agent</div>';
+    return;
+  }
+  agents.forEach(a => {
+    const c = color(a.name);
+    const isTemp = a.is_temp || tempAgentNames.has(a.name);
+    const isOrch = a.role === 'orchestrator';
+    const card = document.createElement('div');
+    const extraClass = [isTemp ? 'temp' : '', isOrch ? 'orchestrator-card' : ''].filter(Boolean).join(' ');
+    card.className = `agent-card ${extraClass}`.trim();
+    card.id = 'card-' + a.name;
+
+    const capTagsHtml = (a.capabilities||[]).map(cap =>
+      `<span class="cap-tag">${escHtml(cap)}</span>`
+    ).join('');
+
+    const canDismiss = !isOrch;
+    card.innerHTML = `
+      ${canDismiss ? `<button class="dismiss-btn" title="解雇" onclick="dismissAgent('${a.name}')">✕</button>` : ''}
+      <div class="agent-name"><span class="dot" style="background:${c}"></span>${escHtml(a.name)}</div>
+      ${a.description ? `<div class="agent-desc">${escHtml(a.description)}</div>` : ''}
+      ${capTagsHtml ? `<div class="cap-tags">${capTagsHtml}</div>` : ''}
+      <div class="role-row">
+        <button class="role-btn btn-to" onclick="toggleRole('${a.name}','to')">To</button>
+        <button class="role-btn btn-cc" onclick="toggleRole('${a.name}','cc')">CC</button>
+      </div>`;
+    list.appendChild(card);
+    updateCardUI(a.name);
+  });
+}
+
+function setTyping(name, typing) {
+  const card = el('card-' + name);
+  if (card) card.classList.toggle('typing', typing);
+}
+
+// ── Message helpers ──────────────────────────────────────────────────────────
+function appendSysMsg(text) {
+  const div = document.createElement('div');
+  div.className = 'sys-msg';
+  div.textContent = text;
+  el('msgList').appendChild(div);
+  scrollBottom();
+}
+
+function appendToolResult(toolName, result, triggeredBy) {
+  // Truncate long results for display
+  const display = result.length > 120 ? result.slice(0, 120) + '…' : result;
+  const card = document.createElement('div');
+  card.className = 'act-card tool';
+  card.innerHTML = `
+    <span class="act-card-icon">🔧</span>
+    <div class="act-card-body">
+      <div class="act-card-title">${escHtml(toolName)}<span style="font-weight:400;margin-left:6px;opacity:.7">by ${escHtml(triggeredBy)}</span></div>
+      <div class="act-card-sub">${escHtml(display)}</div>
+    </div>`;
+  el('msgList').appendChild(card);
+  scrollBottom();
+}
+
+function appendEscalation(data) {
+  const target = data.routed_to || 'orchestrator';
+  const found = data.found_in_cap_table;
+  const card = document.createElement('div');
+  card.className = 'act-card esc';
+  card.innerHTML = `
+    <span class="act-card-icon">↗</span>
+    <div class="act-card-body">
+      <div class="act-card-title">${escHtml(data.agent)} 请求协助 · <code style="font-size:10px">${escHtml(data.capability)}</code> → ${escHtml(target)}</div>
+      <div class="act-card-sub">${escHtml(data.description)}${found ? '' : ' <em>(能力未注册，转给 orchestrator)</em>'}</div>
+    </div>`;
+  el('msgList').appendChild(card);
+  scrollBottom();
+}
+
+// Strip ```tool_call blocks from display text and return them separately
+function extractToolCalls(text) {
+  const blocks = [];
+  const cleaned = text.replace(/```tool_call\s*\n([\s\S]*?)\n```/g, (_, body) => {
+    blocks.push(body.trim());
+    return '';
+  }).trim();
+  return { cleaned, blocks };
+}
+
+function appendMessage(env) {
+  const isUser = env.sender === 'user';
+  const isTemp = env.metadata && env.metadata.is_temp;
+  const isAutoFwd = env.metadata && env.metadata.auto_forward;
+  const wrap = document.createElement('div');
+  const wrapClass = ['msg-wrap', isUser ? 'user' : 'agent', isTemp ? 'temp-agent' : ''].filter(Boolean).join(' ');
+  wrap.className = wrapClass;
+  wrap.id = 'env-' + env.id;
+  const c = isUser ? '#3b82f6' : color(env.sender);
+  const toTags = (env.to||[]).map(t=>`<span class="tag to">To:${escHtml(t)}</span>`).join('');
+  const ccTags = (env.cc||[]).map(t=>`<span class="tag cc">CC:${escHtml(t)}</span>`).join('');
+  const autoTag = isAutoFwd ? '<span class="tag auto">自动转发</span>' : '';
+  const tempTag = isTemp ? '<span class="tag temp-tag">临时</span>' : '';
+  const imgsHtml = (env.images && env.images.length)
+    ? `<div class="bubble-imgs">${env.images.map(src =>
+        `<img src="${escHtml(src)}" onclick="window.open(this.src,'_blank')" loading="lazy">`
+      ).join('')}</div>`
+    : '';
+
+  // Separate tool_call blocks from display text
+  const { cleaned, blocks } = extractToolCalls(env.content || '');
+  const toolCallsHtml = blocks.length
+    ? `<div class="tool-calls-fold" onclick="this.classList.toggle('open')">
+        <span class="tc-fold-label">🔧 ${blocks.length} 个工具调用 <span class="tc-fold-chev">▼</span></span>
+        <div class="tc-fold-body">${blocks.map(b => `<pre class="tc-pre">${escHtml(b)}</pre>`).join('')}</div>
+      </div>`
+    : '';
+
+  const pinBtn = isUser
+    ? `<button class="msg-pin-btn" title="以此消息为锚点创建检查点" onclick="createCheckpoint('${THREAD_ID}',event,'${env.id}')">📌</button>`
+    : '';
+
+  wrap.style.position = 'relative';
+  wrap.innerHTML = `
+    <div class="msg-meta">
+      <span class="sender" style="color:${c}">${escHtml(env.sender)}</span>
+      <div class="msg-tags">${toTags}${ccTags}${autoTag}${tempTag}</div>
+      <span>${(env.timestamp||'').slice(11,19)}</span>
+    </div>
+    ${toolCallsHtml}
+    <div class="bubble">${escHtml(cleaned)}${imgsHtml}</div>
+    ${pinBtn}`;
+  el('msgList').appendChild(wrap);
+  scrollBottom();
+}
+
+// ── Think-tag streaming parser ────────────────────────────────────────────────
+function parseStreamText(text) {
+  // Returns { mainText, thinkText, isThinking }
+  let mainText = '', thinkText = '', remaining = text, isThinking = false;
+  while (remaining.length > 0) {
+    if (!isThinking) {
+      const i = remaining.indexOf('<think>');
+      if (i === -1) { mainText += remaining; break; }
+      mainText += remaining.slice(0, i);
+      remaining = remaining.slice(i + 7);
+      isThinking = true;
+    } else {
+      const i = remaining.indexOf('</think>');
+      if (i === -1) { thinkText += remaining; isThinking = true; break; }
+      thinkText += remaining.slice(0, i);
+      remaining = remaining.slice(i + 8);
+      isThinking = false;
+    }
+  }
+  return { mainText: mainText.trimStart(), thinkText, isThinking };
+}
+
+// ── Process bubble (thinking/reasoning shown before final reply) ─────────────
+let processBubbles = {};   // name → { wrap, itemsEl, headerTimerEl, interval, startTime, itemCount, currentReasoningEl, currentReasoningBody, currentReasoningChars }
+
+function _ensureProcessBubble(name) {
+  if (processBubbles[name]) return;
+  const c = color(name);
+  const isTemp = tempAgentNames.has(name);
+  const wrap = document.createElement('div');
+  wrap.className = 'proc-wrap';
+  wrap.innerHTML = `
+    <div class="proc-bubble" id="proc-${name}">
+      <div class="proc-header">
+        <span class="proc-sender" style="color:${c}">${escHtml(name)}</span>
+        ${isTemp ? '<span class="tag temp-tag" style="font-size:9px">临时</span>' : ''}
+        <span class="proc-badge"><span class="proc-badge-dot"></span>处理中</span>
+        <span class="proc-stat">⏱ <span class="val" id="ptimer-${name}">0.0</span>s &nbsp; <span id="pitems-${name}">0</span> 项</span>
+      </div>
+      <div class="proc-items" id="pitems-wrap-${name}"></div>
+    </div>`;
+  el('msgList').appendChild(wrap);
+  scrollBottom();
+
+  const startTime = Date.now();
+  const interval = setInterval(() => {
+    const t = document.getElementById('ptimer-' + name);
+    if (t) t.textContent = ((Date.now() - startTime) / 1000).toFixed(1);
+  }, 100);
+
+  processBubbles[name] = {
+    wrap, startTime, interval,
+    itemCount: 0,
+    currentReasoningEl: null,
+    currentReasoningBody: null,
+    currentReasoningChars: 0,
+  };
+}
+
+function appendReasoningChunk(name, delta) {
+  _ensureProcessBubble(name);
+  const p = processBubbles[name];
+  const itemsWrap = document.getElementById('pitems-wrap-' + name);
+  if (!itemsWrap) return;
+
+  // Start a new reasoning block if needed
+  if (!p.currentReasoningEl) {
+    p.itemCount++;
+    const idx = p.itemCount;
+    const item = document.createElement('div');
+    item.className = 'proc-item reasoning';
+    item.id = `pritem-${name}-${idx}`;
+    item.innerHTML = `
+      <div class="proc-item-header" onclick="toggleProcItem('${name}',${idx})">
+        <span class="proc-item-icon">💭</span>
+        <span class="proc-item-label">思考 #${idx}</span>
+        <span class="proc-item-chars" id="prchars-${name}-${idx}">0 字</span>
+        <span class="proc-item-chev">▼</span>
+      </div>
+      <div class="proc-item-body" id="prbody-${name}-${idx}"></div>`;
+    item.classList.add('open');
+    itemsWrap.appendChild(item);
+    p.currentReasoningEl = item;
+    p.currentReasoningBody = document.getElementById(`prbody-${name}-${idx}`);
+    p.currentReasoningChars = 0;
+    const cntEl = document.getElementById('pitems-' + name);
+    if (cntEl) cntEl.textContent = p.itemCount;
+  }
+
+  // Append delta to current reasoning block
+  p.currentReasoningChars += delta.length;
+  if (p.currentReasoningBody) {
+    p.currentReasoningBody.textContent += delta;
+  }
+  const charsEl = document.getElementById(`prchars-${name}-${p.itemCount}`);
+  if (charsEl) charsEl.textContent = p.currentReasoningChars + ' 字';
+  scrollBottom();
+}
+
+function _closeCurrentReasoning(name) {
+  const p = processBubbles[name];
+  if (!p) return;
+  if (p.currentReasoningEl) {
+    p.currentReasoningEl.classList.remove('open'); // auto-collapse when switching to text
+    p.currentReasoningEl = null;
+    p.currentReasoningBody = null;
+    p.currentReasoningChars = 0;
+  }
+}
+
+function toggleProcItem(name, idx) {
+  const item = document.getElementById(`pritem-${name}-${idx}`);
+  if (item) item.classList.toggle('open');
+}
+
+function finalizeProcessBubble(name) {
+  const p = processBubbles[name];
+  if (!p) return;
+  clearInterval(p.interval);
+  _closeCurrentReasoning(name);
+  const bubble = document.getElementById('proc-' + name);
+  if (bubble) {
+    bubble.classList.add('done');
+    const badge = bubble.querySelector('.proc-badge');
+    if (badge) {
+      const elapsed = ((Date.now() - p.startTime) / 1000).toFixed(1);
+      badge.innerHTML = `✓ ${elapsed}s`;
+    }
+  }
+  delete processBubbles[name];
+}
+
+// ── Reply bubble (final text output) ─────────────────────────────────────────
+function startStreamBubble(name) {
+  if (streamingBubbles[name]) return;
+  const c = color(name);
+  const isTemp = tempAgentNames.has(name);
+  const wrap = document.createElement('div');
+  wrap.className = `msg-wrap agent ${isTemp ? 'temp-agent' : ''}`.trim();
+  wrap.innerHTML = `
+    <div class="msg-meta stream-meta-row">
+      <span class="sender" style="color:${c}">${escHtml(name)}</span>
+      ${isTemp ? '<span class="tag temp-tag">临时</span>' : ''}
+      <span class="stream-live-badge"><span class="stream-live-dot"></span>回复中</span>
+      <span class="stream-stat">⏱ <span class="val" id="stimer-${name}">0.0</span>s</span>
+      <span class="stream-stat"><span class="val" id="schars-${name}">0</span> 字</span>
+    </div>
+    <div class="bubble streaming" id="stream-${name}"></div>`;
+  el('msgList').appendChild(wrap);
+  scrollBottom();
+
+  const startTime = Date.now();
+  const interval = setInterval(() => {
+    const t = document.getElementById('stimer-' + name);
+    if (t) t.textContent = ((Date.now() - startTime) / 1000).toFixed(1);
+  }, 100);
+
+  streamingBubbles[name] = { wrap, mainEl: document.getElementById('stream-' + name), text: '', interval, startTime };
+  setTyping(name, true);
+}
+
+function appendDelta(name, delta) {
+  // Close any open reasoning block when main text starts arriving
+  if (processBubbles[name]) _closeCurrentReasoning(name);
+
+  // Handle <think> tags embedded in text (for models that use text-based thinking)
+  if (!streamingBubbles[name]) startStreamBubble(name);
+  const s = streamingBubbles[name];
+  s.text += delta;
+
+  const { mainText, thinkText, isThinking } = parseStreamText(s.text);
+
+  // Route <think> content into the process bubble
+  if (thinkText || isThinking) {
+    _ensureProcessBubble(name);
+    // Sync think text to process bubble (replace entire content for simplicity)
+    const p = processBubbles[name];
+    if (!p.currentReasoningEl && (thinkText || isThinking)) {
+      appendReasoningChunk(name, "");  // creates the block
+    }
+    if (p.currentReasoningBody) {
+      const display = thinkText + (isThinking ? ' ▋' : '');
+      p.currentReasoningBody.textContent = display;
+      p.currentReasoningChars = display.length;
+      const charsEl = document.getElementById(`prchars-${name}-${p.itemCount}`);
+      if (charsEl) charsEl.textContent = p.currentReasoningChars + ' 字';
+    }
+  }
+
+  s.mainEl.textContent = mainText;
+  const charsEl = document.getElementById('schars-' + name);
+  if (charsEl) charsEl.textContent = mainText.length;
+  scrollBottom();
+}
+
+function finalizeStream(name, env) {
+  // Finalize process bubble first
+  if (processBubbles[name]) finalizeProcessBubble(name);
+
+  const s = streamingBubbles[name];
+  if (s) {
+    clearInterval(s.interval);
+    s.wrap.remove();
+    delete streamingBubbles[name];
+  }
+  setTyping(name, false);
+  if (env) appendMessage(env);
+}
+
+// ── WebSocket ────────────────────────────────────────────────────────────────
+let _intentionalClose = false;   // true = deliberate switch, reconnect immediately
+
+function connect() {
+  ws = new WebSocket(WS_URL);   // WS_URL is always current
+  el('threadLabel').textContent = 'Thread: ' + THREAD_ID;
+  ws.onopen = () => { el('statusDot').className = 'status-dot'; el('sendBtn').disabled = false; };
+  ws.onclose = () => {
+    el('statusDot').className = 'status-dot offline';
+    el('sendBtn').disabled = true;
+    const delay = _intentionalClose ? 0 : 3000;
+    _intentionalClose = false;
+    setTimeout(connect, delay);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = ({ data }) => {
+    let ev; try { ev = JSON.parse(data); } catch { return; }
+
+    if (ev.type === 'init') {
+      const proj = ev.project || currentProject;
+      if (proj && proj !== currentProject) {
+        // First connection or project changed server-side — ensure our thread matches
+        currentProject = proj;
+        el('projectName').textContent = proj;
+        const correctTid = getThreadId(proj);
+        if (correctTid !== THREAD_ID) {
+          // Reconnect with the right thread_id
+          THREAD_ID = correctTid;
+          WS_URL = `ws://${location.host}/ws/${THREAD_ID}`;
+          _intentionalClose = true;
+          ws.close();
+          return;
+        }
+        localStorage.setItem('thread_id::__last__', THREAD_ID);
+      }
+      renderAgents(ev.agents || []);
+      el('msgList').innerHTML = '';
+      (ev.log || []).forEach(appendMessage);
+      fetchProjects();
+      fetchConversations();
+      return;
+    }
+    if (ev.type === 'envelope_recorded') {
+      appendMessage(ev.envelope);
+      (ev.envelope.to||[]).forEach(n => { if (n !== 'user') startStreamBubble(n); });
+      (ev.envelope.cc||[]).forEach(n => { if (n !== 'user') startStreamBubble(n); });
+      return;
+    }
+    if (ev.type === 'text_delta') { appendDelta(ev.agent, ev.delta); return; }
+    if (ev.type === 'reasoning_delta') { appendReasoningChunk(ev.agent, ev.delta); return; }
+    if (ev.type === 'agent_done') { finalizeStream(ev.agent, ev.envelope); return; }
+    if (ev.type === 'tool_result') {
+      appendToolResult(ev.tool, ev.result, ev.triggered_by);
+      return;
+    }
+    if (ev.type === 'agents_updated') {
+      renderAgents(ev.agents || []);
+      showToast('团队成员已更新');
+      return;
+    }
+    if (ev.type === 'escalation') {
+      appendEscalation(ev);
+      return;
+    }
+    if (ev.type === 'context_updated') {
+      el('ctxBadge').classList.add('show');
+      setTimeout(() => el('ctxBadge').classList.remove('show'), 8000);
+      return;
+    }
+    if (ev.type === 'checkpoint_restored') {
+      showToast(`✅ 已回滚到检查点「${ev.note || ''}」`);
+      // Clear current UI and reconnect to load restored content
+      el('msgList').innerHTML = '';
+      _intentionalClose = true;
+      ws.close();
+      return;
+    }
+    if (ev.type === 'error') {
+      if (ev.agent) finalizeStream(ev.agent, null);
+      const e = document.createElement('div');
+      e.className = 'sys-msg';
+      e.style.borderColor = '#7f1d1d';
+      e.style.color = '#fca5a5';
+      e.textContent = `⚠ ${ev.agent||'system'}: ${ev.message}`;
+      el('msgList').appendChild(e);
+      scrollBottom();
+    }
+  };
+}
+
+// ── Send ─────────────────────────────────────────────────────────────────────
+function sendMessage() {
+  const to = Object.keys(selection).filter(n => selection[n] === 'to');
+  const cc = Object.keys(selection).filter(n => selection[n] === 'cc');
+  const content = el('bodyField').value.trim();
+  const images = pendingImages.map(i => i.dataUri);
+  if (!content && !images.length) return;
+  if (!to.length) { showToast('请先选择至少一个 To 收件人'); return; }
+  const payload = { sender: 'user', to, cc, content };
+  if (images.length) payload.images = images;
+  ws.send(JSON.stringify(payload));
+  el('bodyField').value = '';
+  el('bodyField').style.height = 'auto';
+  pendingImages = [];
+  renderImagePreviews();
+}
+
+el('bodyField').addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); sendMessage(); }
+});
+el('bodyField').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+// ── Image paste / upload ──────────────────────────────────────────────────────
+el('bodyField').addEventListener('paste', e => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) addImageFile(file);
+    }
+  }
+});
+
+function handleFileInput(evt) {
+  for (const file of evt.target.files) addImageFile(file);
+  evt.target.value = '';
+}
+
+function addImageFile(file) {
+  const reader = new FileReader();
+  reader.onload = ev => {
+    pendingImages.push({ dataUri: ev.target.result, name: file.name });
+    renderImagePreviews();
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeImage(idx) {
+  pendingImages.splice(idx, 1);
+  renderImagePreviews();
+}
+
+function renderImagePreviews() {
+  const container = el('imgPreviews');
+  container.innerHTML = '';
+  pendingImages.forEach((img, i) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'img-preview-wrap';
+    wrap.innerHTML = `<img src="${img.dataUri}" alt="img${i}">
+      <button class="rm-img" onclick="removeImage(${i})">✕</button>`;
+    container.appendChild(wrap);
+  });
+}
+el('addAgentModal').addEventListener('click', e => { if (e.target === el('addAgentModal')) closeAddAgentModal(); });
+el('sendBtn').disabled = true;
+connect();
+</script>
+</body>
+</html>

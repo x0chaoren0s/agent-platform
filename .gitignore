@@ -1,0 +1,20 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Runtime data
+projects/*/memory/
+projects/*/sessions/
+projects/*/chat_log/
+projects/*/context.md
+
+# Local/private project state generated during experiments
+projects/Interview/
+projects/travel_plan/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
