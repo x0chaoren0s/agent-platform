@@ -9,6 +9,8 @@ projects/*/memory/
 projects/*/sessions/
 projects/*/chat_log/
 projects/*/context.md
+projects/*/workspace/*
+!projects/*/workspace/.gitkeep
 
 # Local/private project state generated during experiments
 projects/Interview/

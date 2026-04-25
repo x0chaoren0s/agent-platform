@@ -786,15 +786,15 @@ async function fetchPendingQuestions()      // GET /api/.../questions?status=pen
 
 ### Phase 1：存储层（commit: `feat(store): ...`）
 
-1. ⬜ 创建 `core/task_store.py`：DDL 常量 + `Task` / `TaskHistoryEntry` dataclass + `TaskStore` 类骨架（仅 `__init__` + `init_db` 跑通）
-2. ⬜ 在 `task_store.py` 实现 `create` / `get` / `list` / `update_status` / `update_progress`
-3. ⬜ 在 `task_store.py` 实现 `submit_deliverable`（内部完成 status→done + history + 文件写入逻辑分离到 helper）
-4. ⬜ 在 `task_store.py` 实现 `find_ready_downstream`（核心：上游 task_id 完成 → 找出 depends_on 全部 done 的下游）
-5. ⬜ 在 `task_store.py` 实现 `history` / `list_pending_by_assignee`
-6. ⬜ 创建 `core/question_store.py`：DDL（user_questions 部分） + `UserQuestion` dataclass + `QuestionStore` 类完整 CRUD
-7. ⬜ 修改 `.gitignore` 追加 `projects/*/workspace/`
-8. ⬜ 创建占位 `projects/Interview/workspace/.gitkeep` 与 `projects/manga/workspace/.gitkeep`
-9. ⬜ Commit Phase 1：`feat(store): 新增 task_store / question_store + workspace 目录`
+1. ✅ 创建 `core/task_store.py`：DDL 常量 + `Task` / `TaskHistoryEntry` dataclass + `TaskStore` 类骨架（仅 `__init__` + `init_db` 跑通）
+2. ✅ 在 `task_store.py` 实现 `create` / `get` / `list` / `update_status` / `update_progress`
+3. ✅ 在 `task_store.py` 实现 `submit_deliverable`（内部完成 status→done + history + 文件写入逻辑分离到 helper）
+4. ✅ 在 `task_store.py` 实现 `find_ready_downstream`（核心：上游 task_id 完成 → 找出 depends_on 全部 done 的下游）
+5. ✅ 在 `task_store.py` 实现 `history` / `list_pending_by_assignee`
+6. ✅ 创建 `core/question_store.py`：DDL（user_questions 部分） + `UserQuestion` dataclass + `QuestionStore` 类完整 CRUD
+7. ✅ 修改 `.gitignore` 追加 `projects/*/workspace/`
+8. ✅ 创建占位 `projects/Interview/workspace/.gitkeep` 与 `projects/manga/workspace/.gitkeep`
+9. ✅ Commit Phase 1：`feat(store): 新增 task_store / question_store + workspace 目录`
 
 ### Phase 2：工具层（commit: `feat(tools): ...`）
 
