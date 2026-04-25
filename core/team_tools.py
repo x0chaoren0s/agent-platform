@@ -108,6 +108,7 @@ async def assign_task(
     deliverable_kind: str = "markdown",
     context_refs: list[str] | None = None,
     priority: str = "normal",
+    **kwargs: Any,  # 兼容性：忽略未知参数如 task
 ) -> str:
     pdir = Path(project_dir)
     orchestrator = _orchestrator_name(pdir)
@@ -148,6 +149,7 @@ async def update_task(
     task_id: str,
     status: str | None = None,
     progress_note: str | None = None,
+    **kwargs: Any,
 ) -> str:
     _ = thread_id
     store = await _get_task_store(project_dir)
@@ -177,6 +179,7 @@ async def submit_deliverable(
     content: str | None = None,
     file_path: str | None = None,
     summary: str,
+    **kwargs: Any,
 ) -> str:
     _ = thread_id
     store = await _get_task_store(project_dir)

@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import sys
 import textwrap
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -36,6 +37,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 load_dotenv(Path(__file__).parent / ".env")
+
+# Windows console defaults can cause CJK logs to be mojibake.
+# Force UTF-8 output so agent names and Chinese messages render correctly.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 from core.registry import AgentRegistry
 from core.router import MessageRouter
@@ -233,6 +241,28 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
       【提问协议】
       - 需要用户决策时使用 ask_user，并提供 2-3 个 options。
       - 信息缺失时优先 ask_user，不要猜测。
+
+      【新增工具示例】（必须按此格式调用）
+      ```tool_call
+      {"tool": "assign_task", "args": {"assignee": "调研员", "title": "完成星火万物 AIGC 岗位调研", "brief": "聚焦公司背景、产研流程、面试真题", "deadline": "2026-04-26 12:00", "deliverable_kind": "markdown"}}
+      ```
+      ```tool_call
+      {"tool": "list_tasks", "args": {"scope": "all"}}
+      ```
+      ```tool_call
+      {"tool": "send_message", "args": {"to": ["内容顾问"], "content": "我把简历相关章节加重了，你直接接", "related_task": "task-0002"}}
+      ```
+      ```tool_call
+      {"tool": "ask_user", "args": {"question": "您简历更想突出哪个方向？", "options": [{"id": "tech", "label": "技术深度"}, {"id": "product", "label": "产品视角"}], "urgency": "high"}}
+      ```
+
+      【硬性约束 - 违反视为错误】
+      1. 派发任务时必须一条一条调用 assign_task 工具，禁止用 markdown 列表"列任务"代替；
+         每个成员一个 assign_task，不允许 1 条文本描述 5 个任务。
+      2. 需要用户决策时必须调用 ask_user 工具弹出选项卡，禁止在正文里写 "A. ... B. ..."；
+         选项必须放在 ask_user 的 options 字段里。
+      3. 禁止用 update_project_context 替代 assign_task；
+         update_project_context 仅用于更新跨对话的项目背景，不是任务派发渠道。
 
       【注意事项】
       - 用中文与用户交流
@@ -799,13 +829,28 @@ async def api_answer_question(thread_id: str, q_id: str, body: AnswerQuestionReq
         return {"ok": False, "error": f"question not found or already answered: {q_id}"}
     await _ws_broadcast(thread_id, {"type": "user_answer_received", "question_id": q_id, "answer": body.answer})
     router = _get_router(thread_id)
-    await router.dispatch_internal(
+    pdir = _project_dir(_current_project)
+    
+    # 像 post_chat 那样处理事件和 tool_calls
+    async for event in router._dispatch_inner(
         sender="user",
         to=[q.asker],
         cc=[],
         content=f"【用户回答】问题 {q_id}: {body.answer}",
         metadata={"type": "user_answer", "question_id": q_id, "related_task": q.related_task},
-    )
+    ):
+        await _ws_broadcast(thread_id, event)
+        if event.get("type") == "agent_done":
+            content = event.get("envelope", {}).get("content", "")
+            tr = await _process_tool_calls(
+                content,
+                pdir,
+                thread_id=thread_id,
+                caller_agent=event.get("agent", ""),
+            )
+            if tr:
+                router.record_tool_feedback(event.get("agent", ""), tr)
+                await _ws_broadcast(thread_id, {"type": "tool_results", "results": tr})
     return {"ok": True, "data": q.__dict__}
 
 

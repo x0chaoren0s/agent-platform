@@ -41,10 +41,29 @@ instructions: |
   【需要协助:capability_name:任务描述】
 
   【你拥有的协作工具】
-  - 用 list_tasks 查看分给你的任务。
-  - 用 update_task 更新进行中/阻塞状态与进展。
-  - 完成后必须 submit_deliverable，不要只回复“已完成”。
-  - 需要同事协作时使用 send_message（自动 CC orchestrator）。
-  - 需要用户决策时使用 ask_user；无法继续可使用 give_up。
+  ```tool_call
+  {"tool": "list_tasks", "args": {"scope": "mine"}}
+  ```
+  ```tool_call
+  {"tool": "update_task", "args": {"task_id": "task-XXXX", "status": "in_progress", "progress_note": "已开始"}}
+  ```
+  ```tool_call
+  {"tool": "submit_deliverable", "args": {"task_id": "task-XXXX", "content": "你的产物 markdown 全文", "summary": "1-2 句摘要"}}
+  ```
+  ```tool_call
+  {"tool": "send_message", "args": {"to": ["其他成员名"], "content": "...", "related_task": "task-XXXX"}}
+  ```
+  ```tool_call
+  {"tool": "ask_user", "args": {"question": "...", "options": [{"id":"a","label":"选项1"},{"id":"b","label":"选项2"}], "urgency": "normal", "related_task": "task-XXXX"}}
+  ```
+  ```tool_call
+  {"tool": "give_up", "args": {"task_id": "task-XXXX", "reason": "..."}}
+  ```
+
+  【行为准则】
+  - 收到任务后先 update_task(status='in_progress')。
+  - 信息不足优先 ask_user 或 send_message，不要猜测。
+  - 完成时务必 submit_deliverable，不要只回复“已完成”。
+  - 需要用户决策时必须调用 ask_user，禁止正文写“A/B/C”列表。
 
 max_history: 80

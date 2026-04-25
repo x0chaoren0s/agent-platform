@@ -717,6 +717,14 @@ async function fetchPendingQuestions()      // GET /api/.../questions?status=pen
 ```tool_call
 {"tool": "ask_user", "args": {"question": "...", "options": [{"id":"a","label":"..."},{"id":"b","label":"..."}], "urgency": "high"}}
 ```
+
+【硬性约束 - 违反视为错误】
+1. 派发任务时必须一条一条调用 assign_task 工具，禁止用 markdown 列表"列任务"代替；
+   每个成员一个 assign_task，不允许 1 条文本描述 5 个任务。
+2. 需要用户决策时必须调用 ask_user 工具弹出选项卡，禁止在正文里写 "A. ... B. ..."；
+   选项必须放在 ask_user 的 options 字段里。
+3. 禁止用 update_project_context 替代 assign_task；
+   update_project_context 仅用于更新跨对话的项目背景，不是任务派发渠道。
 ```
 
 ### 8.2 普通成员追加段（追加到所有非 orchestrator 的成员 yaml）
@@ -745,7 +753,7 @@ async function fetchPendingQuestions()      // GET /api/.../questions?status=pen
 直接联系同事（orchestrator 自动收到 CC）。
 
 ```tool_call
-{"tool": "ask_user", "args": {"question": "...", "options": [...], "urgency": "normal", "related_task": "task-XXXX"}}
+{"tool": "ask_user", "args": {"question": "...", "options": [{"id":"a","label":"选项1"},{"id":"b","label":"选项2"}], "urgency": "normal", "related_task": "task-XXXX"}}
 ```
 向用户提问（任务会暂停等回复）。
 
@@ -759,6 +767,7 @@ async function fetchPendingQuestions()      // GET /api/.../questions?status=pen
 - 信息不足时优先 ask_user 或 send_message 找同事，不要瞎猜
 - 完成时务必 `submit_deliverable`，不要只回复"已完成"
 - 同事之间保持商务简洁，避免无意义客套
+- 需要用户决策时必须调用 ask_user，禁止正文写"A. ... B. ..."列表
 ```
 
 ---
@@ -975,3 +984,79 @@ MVP-Plus DoD 达成后：
 [本 session 计划完成步骤范围]
 第 X ~ 第 Y 步
 ```
+
+---
+
+## 14. Phase 6 实施偏差与修补任务（2026-04-25 REVIEW 发现）
+
+### 14.1 状态
+
+- §10 全部 56 步状态 = ✅（commit `12375a4` 收尾）
+- §11.4 DoD 验证 = ❌ **未通过**
+
+### 14.2 测试现场
+
+- 测试项目：`projects/opc/`
+- 对话线程 ID：`main-t6c4z`，chat_log: `projects/opc/chat_log/main-t6c4z.json`
+- 5 名成员已通过 `recruit_fixed` 招募完成（`msg-0004` ~ `msg-0005`）
+- 用户问"我们从零开始第一步做什么"后，orchestrator 行为如下：
+
+| envelope | 应做 | 实际 |
+|---|---|---|
+| `msg-0007` | 调 `ask_user(options=[...])` 弹问题卡 | 在文本里写 "A. ... B. ... C. ..." |
+| `msg-0009` | 调 5 次 `assign_task` | 调了 1 次 `update_project_context`（旧工具）+ 文本列 5 条任务 |
+
+**0 个 `assign_task` / 0 个 `ask_user` 工具调用**——成员从未被唤醒。
+
+### 14.3 根因
+
+`projects/opc/agents/orchestrator.yaml` 第 50-66 行的 §8.1 协议段**只有文字描述、缺所有 tool_call JSON 示例**。
+对照：第 22-40 行老工具（`recruit_fixed` 等）每个都有 JSON 范例 → 模型对老工具"会抄作业"，对新工具"没教材"。
+
+Phase 6（commit `0c1e459`）实施时把文档 §8.1 的"新增工具示例"代码块**省略了**，仅保留了文字描述。同样的简化也发生在所有项目的 yaml 与 `main.py::_ORCHESTRATOR_YAML_TMPL`。
+
+### 14.4 修补任务（按 RIPER：先 PLAN 修订本节，再 EXECUTE 重刷 yaml）
+
+#### 选项 B（推荐先做，验证根因）
+
+55B-1. ~~⬜~~ ✅ **仅修补 `projects/opc/agents/orchestrator.yaml`**（跳过，直接执行 A）
+55B-2. ~~⬜~~ ✅ 重启服务
+55B-3. ~~⬜~~ ✅ 冒烟测试
+55B-4. ~~⬜~~ ✅ `tool_results: ask_user` 已出现，链路正常
+55B-5. ~~⬜~~ ✅ 通过 → 进入选项 A
+
+#### 选项 A（B 验证根因后批量修）
+
+55A-1. ✅ PLAN 模式更新文档 §8.1 / §8.2，把禁令补进规范
+55A-2. ✅ 修补 `main.py::_ORCHESTRATOR_YAML_TMPL`
+55A-3. ✅ 修补 `projects/Interview/agents/orchestrator.yaml`
+55A-4. ✅ 修补 `projects/manga/agents/orchestrator.yaml`
+55A-5. ✅ 批量修补所有成员 yaml（Interview 4 个 + manga 2 个 + opc 5 个）
+55A-6. ✅ 完成端到端重测，`tool_results: ask_user` 返回正常
+55A-7. ⬜ Commit：`fix(prompt): 补全新工具 tool_call 示例与强禁令，修复 DoD 偏差`（待专用 session 提交）
+
+### 14.5 三条必须加进 prompt 的强禁令（核心补丁内容）
+
+```
+【硬性约束 - 违反视为错误】
+1. 派发任务时必须一条一条调用 assign_task 工具，禁止用 markdown 列表"列任务"代替；
+   每个成员一个 assign_task，不允许 1 条文本描述 5 个任务。
+2. 需要用户决策时必须调用 ask_user 工具弹出选项卡，禁止在正文里写 "A. ... B. ..."；
+   选项必须放在 ask_user 的 options 字段里。
+3. 禁止用 update_project_context 替代 assign_task；
+   update_project_context 仅用于更新跨对话的项目背景，不是任务派发渠道。
+```
+
+### 14.6 已知未验证项（修补完后顺手验证）
+
+- DoD #3 Kanban 实时更新（无任务时无法验证）
+- DoD #4 成员↔成员 send_message + CC orchestrator
+- 防洪水阈值：人为构造同对成员 7 条 send_message → 第 7 条被拒/警告
+
+### 14.7 关键事实速查（新 session 不要遗漏）
+
+- Server 启动：`D:\Users\60490\.conda\envs\agent-platform\python.exe D:\projects\aiMoney\agent-platform\main.py`
+- 端口 8765，kill 旧进程：`Get-NetTCPConnection -LocalPort 8765 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }`
+- 测试项目：`projects/opc/` 已存在，无需重建
+- 修补一个 yaml 后无需重启（registry 有 watchdog 热加载，但服务端逻辑/模板修改需要重启）
+
