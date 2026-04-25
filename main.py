@@ -696,6 +696,8 @@ async def post_chat(req: ChatRequest):
             content = event.get("envelope", {}).get("content", "")
             tr = await _process_tool_calls(content, pdir)
             tool_results.extend(tr)
+            if tr:
+                router.record_tool_feedback(event.get("agent", ""), tr)
     return {"events": events, "tool_results": tool_results}
 
 
@@ -775,6 +777,8 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
                     reply_chunks = full_reply_by_agent.pop(agent_name, [])
                     reply_text = "".join(reply_chunks)
                     tool_results = await _process_tool_calls(reply_text, pdir)
+                    if tool_results:
+                        router.record_tool_feedback(agent_name, tool_results)
                     for tr in tool_results:
                         # Feed tool result back as a system message in the log
                         feedback_event = {

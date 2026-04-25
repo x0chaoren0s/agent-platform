@@ -462,6 +462,29 @@ class MessageRouter:
             events.append(event)
         return events
 
+    def record_tool_feedback(self, triggered_by: str, tool_results: list[dict[str, str]]) -> dict[str, Any] | None:
+        """
+        Write tool execution results into the global log so agents see them on the next turn.
+
+        Without this, outcomes only go to the WebSocket UI as ``tool_result`` events and are
+        never included in :meth:`_build_prompt_for` history.
+        """
+        if not tool_results or not (triggered_by or "").strip():
+            return None
+        lines = [f"【{tr['tool']}】{tr['result']}" for tr in tool_results]
+        content = "【工具执行结果】\n" + "\n".join(lines)
+        envelope = Envelope(
+            id=self._next_id(),
+            sender="platform",
+            to=[triggered_by],
+            cc=[],
+            content=content,
+            metadata={"tool_feedback": True},
+        )
+        self._global_log.append(envelope)
+        self._flush_log()
+        return envelope.to_dict()
+
     def get_global_log(self) -> list[dict[str, Any]]:
         return [env.to_dict() for env in self._global_log]
 
