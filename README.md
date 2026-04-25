@@ -16,6 +16,11 @@
 - 成员之间直接通信：`send_message` 自动 CC orchestrator，并带防洪水保护。
 - ask_user 主动提问 + 待办收件箱：支持选项题/开放题，用户回答后自动回流给提问成员。
 - 项目工作区：`workspace/` 存放交付物文件，任务状态落库到 `tasks.db`。
+- 红色动作安全阀：`dismiss_member` / `recruit_fixed` / `update_project_context` 必须先 `ask_user` 获得确认 marker。
+- 任务级真心跳：按任务优先级检测静默任务（high=10m / normal=30m / low=2h），并带 10 分钟 advisory 去抖；assignee 有发言则不算静默。
+- 孤儿任务警告：解雇成员后，其任务自动转交 orchestrator，并推送转交 advisory；heartbeat 检测到无主任务时发出一次性孤儿告警（24h debounce）。
+- 团队放假开关：线程级 pause/resume，暂停后心跳不再注入 advisory。
+- 协调升级路径：orchestrator 按 `send_message -> update_task -> ask_user -> dismiss_member` 顺序升级干预。
 
 ## 目录结构
 
@@ -67,3 +72,8 @@ http://localhost:8765
 - 本地实验项目 `projects/Interview/`、`projects/travel_plan/`
 
 如需提交新的示例项目，建议只提交 `projects/<name>/agents/*.yaml` 这类可复用配置，不提交对话日志、数据库、会话文件或个人项目背景。
+
+## 测试规范
+
+- 参见 `docs/testing-conventions.md`，统一约束 sandbox 压测方式、业务化测试话术与复盘清单。
+- 端到端测试 SOP：参见 `docs/test-sop-mvp-plus-plus.md`，从建项目到 DoD 全部 9 项的步骤化操作规范。

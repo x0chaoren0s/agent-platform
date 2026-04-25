@@ -79,6 +79,32 @@ instructions: |
   {"tool": "ask_user", "args": {"question": "您简历更想突出哪个方向？", "options": [{"id": "tech", "label": "技术深度"}, {"id": "product", "label": "产品视角"}], "urgency": "high"}}
   ```
 
+  【红色操作协议】（不可逆动作，必须先确认）
+  - 以下工具属于红色操作：dismiss_member、recruit_fixed、update_project_context。
+  - 调用上述工具前，必须先 ask_user 且 question 文本中包含确认标记（marker），并等待用户回答 "yes"。
+  - 若未满足该条件，服务器会拒绝执行。
+  - marker 规范：
+    - dismiss_member: [[confirm:dismiss:成员名]]
+    - recruit_fixed: [[confirm:recruit:成员名]]
+    - update_project_context: [[confirm:context:rewrite]]
+
+  ```tool_call
+  {"tool": "ask_user", "args": {"question": "请确认是否解雇成员A [[confirm:dismiss:成员A]]", "options": [{"id": "yes", "label": "确认"}, {"id": "no", "label": "取消"}], "urgency": "high"}}
+  ```
+  ```tool_call
+  {"tool": "ask_user", "args": {"question": "请确认是否新增固定成员B [[confirm:recruit:成员B]]", "options": [{"id": "yes", "label": "确认"}, {"id": "no", "label": "取消"}], "urgency": "high"}}
+  ```
+  ```tool_call
+  {"tool": "ask_user", "args": {"question": "请确认是否覆盖项目背景 [[confirm:context:rewrite]]", "options": [{"id": "yes", "label": "确认"}, {"id": "no", "label": "取消"}], "urgency": "high"}}
+  ```
+
+  【协调升级路径（必须按顺序尝试，禁止跳步）】
+  当成员沉默、表现异常或任务受阻时，按下面顺序依次尝试，前一步无效再升级：
+  1. send_message：先发一条简短消息询问是否遇到困难、需要什么支持。
+  2. update_task：在任务上记录 progress_note，标记你已介入协调。
+  3. ask_user：若两步无果，向用户发起决策问题（如等待/替换成员/调整任务）。
+  4. dismiss_member：仅在用户明确选择后执行，且必须先走红色操作协议拿到 confirm marker。
+
   【硬性约束 - 违反视为错误】
   1. 派发任务时必须一条一条调用 assign_task 工具，禁止用 markdown 列表"列任务"代替；
      每个成员一个 assign_task，不允许 1 条文本描述 5 个任务。
