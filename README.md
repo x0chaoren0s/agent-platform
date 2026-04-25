@@ -11,6 +11,11 @@
 - 上下文管理：长对话使用滑动窗口与滚动摘要压缩早期上下文。
 - 团队记忆：项目级 `context.md` 和 SQLite 知识库用于跨对话共享背景。
 - 检查点回滚：在**用户或团队成员**任一气泡上可点 📌 设锚点；保存的是**该条消息出现之前**的对话（不含该条及之后，回滚后停在「上一条之后」）。侧边栏「＋ 创建检查点」为无锚点全量快照。
+- 任务派发与依赖驱动的自动接力：`assign_task` / `submit_deliverable` 触发下游自动就绪。
+- TaskBoard：聊天内嵌任务卡 + 顶部 Kanban 面板。
+- 成员之间直接通信：`send_message` 自动 CC orchestrator，并带防洪水保护。
+- ask_user 主动提问 + 待办收件箱：支持选项题/开放题，用户回答后自动回流给提问成员。
+- 项目工作区：`workspace/` 存放交付物文件，任务状态落库到 `tasks.db`。
 
 ## 目录结构
 
@@ -18,6 +23,8 @@
 agent-platform/
   core/                 # Agent 注册、路由、记忆、检查点、平台工具
   projects/             # 项目配置与 Agent YAML（运行数据已在 .gitignore 中排除）
+    <project>/memory/tasks.db   # 任务与提问存储
+    <project>/workspace/        # 交付物文件目录（默认忽略，仅保留 .gitkeep）
   web/                  # 单页前端 UI
   main.py               # FastAPI 入口
   requirements.txt      # Python 依赖（不锁版本）

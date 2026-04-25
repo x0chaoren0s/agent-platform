@@ -856,15 +856,15 @@ async function fetchPendingQuestions()      // GET /api/.../questions?status=pen
 
 ### Phase 7：文档收尾（commit: `doc(readme): ...`）
 
-53. ⬜ 修改 `README.md` 「主要功能」列表，追加：
+53. ✅ 修改 `README.md` 「主要功能」列表，追加：
     - 任务派发与依赖驱动的自动接力
     - TaskBoard（聊天内嵌任务卡 + Kanban）
     - 成员之间直接通信（自动 CC orchestrator）
     - ask_user 主动提问 + 待办收件箱
     - 项目工作区（`workspace/` 存放交付物）
-54. ⬜ 在 `README.md` 「目录结构」段说明新文件 `tasks.db` 与 `workspace/`
-55. ⬜ 在本文档 §10 各步骤改 ✅ 收尾（也可在每步完成时滚动改）
-56. ⬜ Commit Phase 7：`doc(readme): 同步 MVP-Plus 新功能说明`
+54. ✅ 在 `README.md` 「目录结构」段说明新文件 `tasks.db` 与 `workspace/`
+55. ✅ 在本文档 §10 各步骤改 ✅ 收尾（也可在每步完成时滚动改）
+56. ✅ Commit Phase 7：`doc(readme): 同步 MVP-Plus 新功能说明`
 
 ---
 
