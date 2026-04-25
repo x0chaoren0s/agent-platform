@@ -11,6 +11,23 @@ from .task_store import TaskStore
 logger = logging.getLogger("heartbeat")
 
 
+def _parse_ts(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    raw = str(ts).strip()
+    if not raw:
+        return None
+    # Supports both "2026-04-25T22:38:52" and "2026-04-25 15:08:55"
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        pass
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
 class HeartbeatScheduler:
     def __init__(
         self,
@@ -138,11 +155,16 @@ class HeartbeatScheduler:
                     orphaned_to_notify.append(task)
 
         # --- Genuinely silent tasks: assignee exists but no recent activity ---
-        final_silent = [
-            t for t in silent_tasks
-            if t.assignee in known_agents
-            and last_sent.get(t.assignee, "") <= t.updated_at
-        ]
+        final_silent = []
+        for t in silent_tasks:
+            if t.assignee not in known_agents:
+                continue
+            task_updated_dt = _parse_ts(t.updated_at)
+            assignee_last_dt = _parse_ts(last_sent.get(t.assignee))
+            # Keep as silent when there is no assignee message, or assignee message
+            # is not newer than task.updated_at.
+            if assignee_last_dt is None or task_updated_dt is None or assignee_last_dt <= task_updated_dt:
+                final_silent.append(t)
 
         total_advisory_count = len(orphaned_to_notify) + len(final_silent)
         self._last_silent_count[thread_id] = total_advisory_count
