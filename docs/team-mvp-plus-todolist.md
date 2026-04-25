@@ -835,15 +835,15 @@ async function fetchPendingQuestions()      // GET /api/.../questions?status=pen
 
 ### Phase 5：前端 UI（commit: `feat(web): ...`）
 
-38. ⬜ 在 `web/index.html` 增加 §7.1 全部 CSS
-39. ⬜ 在 toolbar 增加 🔔 收件箱铃铛 + 📋 Kanban 入口按钮
-40. ⬜ 实现 `renderTaskCard` / `appendTaskCard` / `updateTaskCardInPlace`
-41. ⬜ 实现 `openKanban` / `closeKanban` / `renderKanban` / `fetchTasks`
-42. ⬜ 实现 `renderQuestionCard` / `appendQuestionCard` / `answerQuestion`
-43. ⬜ 实现 `updateInboxBadge` / `openInboxDrawer` / `closeInboxDrawer` / `renderInboxList` / `fetchPendingQuestions`
-44. ⬜ 在 socket.onmessage 主 switch 中新增 4 个 case：`task_event` / `user_question` / `user_answer_received` / `internal_message`
-45. ⬜ 在 socket 连接 `init` 事件后调用 `fetchTasks` + `fetchPendingQuestions` 渲染初始状态
-46. ⬜ Commit Phase 5：`feat(web): 任务卡 + Kanban + 问题卡 + 收件箱铃铛`
+38. ✅ 在 `web/index.html` 增加 §7.1 全部 CSS
+39. ✅ 在 toolbar 增加 🔔 收件箱铃铛 + 📋 Kanban 入口按钮
+40. ✅ 实现 `renderTaskCard` / `appendTaskCard` / `updateTaskCardInPlace`
+41. ✅ 实现 `openKanban` / `closeKanban` / `renderKanban` / `fetchTasks`
+42. ✅ 实现 `renderQuestionCard` / `appendQuestionCard` / `answerQuestion`
+43. ✅ 实现 `updateInboxBadge` / `openInboxDrawer` / `closeInboxDrawer` / `renderInboxList` / `fetchPendingQuestions`
+44. ✅ 在 socket.onmessage 主 switch 中新增 4 个 case：`task_event` / `user_question` / `user_answer_received` / `internal_message`
+45. ✅ 在 socket 连接 `init` 事件后调用 `fetchTasks` + `fetchPendingQuestions` 渲染初始状态
+46. ✅ Commit Phase 5：`feat(web): 任务卡 + Kanban + 问题卡 + 收件箱铃铛`
 
 ### Phase 6：提示词升级（commit: `feat(prompt): ...`）
 

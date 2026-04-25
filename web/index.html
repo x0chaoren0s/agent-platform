@@ -345,6 +345,21 @@
   .conv-empty { font-size: 12px; color: var(--muted); padding: 6px 4px; }
   .conv-ctx-badge { display: none; align-self: center; font-size: 10px; background: #1e2d1e; color: var(--green); border: 1px solid #2d4a2d; border-radius: 10px; padding: 2px 8px; margin: 4px 10px; cursor: pointer; }
   .conv-ctx-badge.show { display: block; }
+  .top-actions { margin-left: auto; display: flex; gap: 8px; }
+  .inbox-bell { position: relative; }
+  .inbox-bell .badge { position: absolute; top: -5px; right: -5px; background: #ef4444; color: #fff; border-radius: 12px; font-size: 10px; min-width: 16px; padding: 0 4px; text-align: center; }
+  .task-card { border-radius: 10px; border: 1px solid #2a3142; background: #0d1320; padding: 10px 12px; margin: 6px 0; }
+  .tc-head { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #94a3b8; }
+  .tc-title { color: #e2e8f0; font-weight: 600; margin: 4px 0; }
+  .tc-meta { font-size: 11px; color: #64748b; }
+  .kanban-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: none; z-index: 80; }
+  .kanban-overlay.open { display: block; }
+  .kanban-board { margin: 20px; background: #0b1020; border: 1px solid #2a3142; border-radius: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 12px; }
+  .kanban-col { background: #0d1320; border: 1px solid #2a3142; border-radius: 8px; min-height: 180px; padding: 8px; }
+  .q-card { border-left: 3px solid #fbbf24; background: #1a1410; padding: 10px 12px; margin: 6px 0; border-radius: 6px; }
+  .q-options { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .inbox-drawer { position: fixed; right: 0; top: 0; width: 360px; height: 100vh; background: #0a0e16; border-left: 1px solid #2a3142; transform: translateX(100%); transition: transform .2s; z-index: 90; padding: 14px; overflow: auto; }
+  .inbox-drawer.open { transform: translateX(0); }
 </style>
 </head>
 <body>
@@ -353,6 +368,10 @@
   <button class="hamburger" onclick="toggleSidebar()" aria-label="打开菜单">☰</button>
   <div class="status-dot offline" id="statusDot"></div>
   <h1>Agent Platform</h1>
+  <div class="top-actions">
+    <button class="icon-btn inbox-bell" onclick="openInboxDrawer()" title="收件箱">🔔<span class="badge" id="inboxBadge">0</span></button>
+    <button class="icon-btn" onclick="fetchTasks().then(openKanban)" title="任务看板">📋</button>
+  </div>
   <div class="header-rcpt" id="headerRcpt"></div>
   <div class="thread-label" id="threadLabel">Thread: —</div>
 </header>
@@ -472,6 +491,10 @@
 </div>
 
 <div class="toast" id="toast"></div>
+<div class="kanban-overlay" id="kanbanOverlay" onclick="closeKanban()">
+  <div class="kanban-board" id="kanbanBoard" onclick="event.stopPropagation()"></div>
+</div>
+<div class="inbox-drawer" id="inboxDrawer"></div>
 
 <script>
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -487,6 +510,8 @@ let allProjects = [];
 let currentProject = '';
 let tempAgentNames = new Set();
 let pendingImages = [];   // {dataUri, objectUrl} — images queued for next send
+let latestTasks = [];
+let pendingQuestions = [];
 
 // Stable thread_id per project, persisted in localStorage
 function getThreadId(project) {
@@ -1144,6 +1169,97 @@ function appendMessage(env) {
   scrollBottom();
 }
 
+function renderTaskCard(task, subtype) {
+  return `<div class="task-card" id="task-card-${task.id}">
+    <div class="tc-head">任务 ${escHtml(task.id)} · ${escHtml(subtype||task.status||'updated')}</div>
+    <div class="tc-title">${escHtml(task.title || '')}</div>
+    <div class="tc-meta">负责人: ${escHtml(task.assignee || '-')} · 状态: ${escHtml(task.status || '-')}</div>
+  </div>`;
+}
+
+function appendTaskCard(task, subtype) {
+  const box = document.createElement('div');
+  box.innerHTML = renderTaskCard(task, subtype);
+  el('msgList').appendChild(box.firstElementChild);
+  scrollBottom();
+}
+
+function updateTaskCardInPlace(task) {
+  const node = document.getElementById(`task-card-${task.id}`);
+  if (node) node.outerHTML = renderTaskCard(task, task.status || 'updated');
+}
+
+function openKanban() { el('kanbanOverlay').classList.add('open'); }
+function closeKanban() { el('kanbanOverlay').classList.remove('open'); }
+function renderKanban(tasks) {
+  const cols = [
+    ['pending', '待开始'],
+    ['ready', '就绪'],
+    ['in_progress', '进行中'],
+    ['done', '已完成'],
+  ];
+  el('kanbanBoard').innerHTML = cols.map(([key, title]) => {
+    const cards = tasks.filter(t => t.status === key).map(t =>
+      `<div class="task-card">${escHtml(t.id)}<div class="tc-title">${escHtml(t.title || '')}</div></div>`
+    ).join('');
+    return `<div class="kanban-col"><h3>${title}</h3>${cards || '<div class="tc-meta">空</div>'}</div>`;
+  }).join('');
+}
+
+async function fetchTasks() {
+  const res = await fetch(`/api/threads/${encodeURIComponent(THREAD_ID)}/tasks`);
+  const data = await res.json();
+  latestTasks = (data && data.data) || [];
+  renderKanban(latestTasks);
+  return latestTasks;
+}
+
+function renderQuestionCard(question) {
+  const optHtml = (question.options || []).map(o =>
+    `<button onclick="answerQuestion('${question.id}','${o.id}')">${escHtml(o.label || o.id)}</button>`
+  ).join('');
+  return `<div class="q-card" id="q-card-${question.id}">
+    <div>❓ ${escHtml(question.question || '')}</div>
+    <div class="q-options">${optHtml || `<textarea id="q-input-${question.id}" placeholder="输入回答"></textarea><button onclick="answerQuestion('${question.id}', document.getElementById('q-input-${question.id}').value)">提交</button>`}</div>
+  </div>`;
+}
+
+function appendQuestionCard(question) {
+  const box = document.createElement('div');
+  box.innerHTML = renderQuestionCard(question);
+  el('msgList').appendChild(box.firstElementChild);
+  scrollBottom();
+}
+
+async function answerQuestion(qId, answer) {
+  if (!answer) return;
+  await fetch(`/api/threads/${encodeURIComponent(THREAD_ID)}/questions/${encodeURIComponent(qId)}/answer`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({answer}),
+  });
+  document.getElementById(`q-card-${qId}`)?.remove();
+  await fetchPendingQuestions();
+}
+
+function updateInboxBadge(count) {
+  el('inboxBadge').textContent = String(count || 0);
+}
+function openInboxDrawer() { el('inboxDrawer').classList.add('open'); renderInboxList(pendingQuestions); }
+function closeInboxDrawer() { el('inboxDrawer').classList.remove('open'); }
+function renderInboxList(questions) {
+  el('inboxDrawer').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><b>待办提问</b><button class="icon-btn" onclick="closeInboxDrawer()">✕</button></div>` +
+    (questions.length ? questions.map(q => `<div class="q-card">${escHtml(q.id)} · ${escHtml(q.question)}</div>`).join('') : '<div class="tc-meta">暂无待办</div>');
+}
+async function fetchPendingQuestions() {
+  const res = await fetch(`/api/threads/${encodeURIComponent(THREAD_ID)}/questions?status=pending`);
+  const data = await res.json();
+  pendingQuestions = (data && data.data) || [];
+  updateInboxBadge(pendingQuestions.length);
+  renderInboxList(pendingQuestions);
+  return pendingQuestions;
+}
+
 // ── Think-tag streaming parser ────────────────────────────────────────────────
 function parseStreamText(text) {
   // Returns { mainText, thinkText, isThinking }
@@ -1396,6 +1512,8 @@ function connect() {
       (ev.log || []).forEach(appendMessage);
       fetchProjects();
       fetchConversations();
+      fetchTasks();
+      fetchPendingQuestions();
       return;
     }
     if (ev.type === 'envelope_recorded') {
@@ -1431,6 +1549,28 @@ function connect() {
       el('msgList').innerHTML = '';
       _intentionalClose = true;
       ws.close();
+      return;
+    }
+    if (ev.type === 'task_event') {
+      if (ev.task) {
+        updateTaskCardInPlace(ev.task);
+        appendTaskCard(ev.task, ev.event || ev.subtype || 'updated');
+      }
+      fetchTasks();
+      return;
+    }
+    if (ev.type === 'user_question') {
+      if (ev.question) appendQuestionCard(ev.question);
+      fetchPendingQuestions();
+      return;
+    }
+    if (ev.type === 'user_answer_received') {
+      document.getElementById(`q-card-${ev.question_id}`)?.remove();
+      fetchPendingQuestions();
+      return;
+    }
+    if (ev.type === 'internal_message') {
+      if (ev.envelope) appendMessage(ev.envelope);
       return;
     }
     if (ev.type === 'error') {
