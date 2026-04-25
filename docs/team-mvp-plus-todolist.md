@@ -798,17 +798,17 @@ async function fetchPendingQuestions()      // GET /api/.../questions?status=pen
 
 ### Phase 2：工具层（commit: `feat(tools): ...`）
 
-10. ⬜ 创建 `core/team_tools.py`：模块级注释 + 导入 + `TEAM_TOOL_DISPATCH` 字典骨架（值先填 `None`）
-11. ⬜ 实现 `_get_task_store(project_dir)` 与 `_get_question_store(project_dir)` 单例缓存
-12. ⬜ 实现 `assign_task`（含权限校验 + assignee 存在性校验 + depends_on 校验）
-13. ⬜ 实现 `update_task`（含权限校验 + status 白名单校验）
-14. ⬜ 实现 `submit_deliverable`（含 content 写文件逻辑 + 触发下游唤醒——下游唤醒挪到 router 层调用，本工具仅返回 ready_downstream 列表给上层）
-15. ⬜ 实现 `list_tasks`（输出 markdown 表格）
-16. ⬜ 实现 `send_message`（含防洪水 + 自动 CC orchestrator）
-17. ⬜ 实现 `ask_user`（含 related_task 切 blocked + 写 question_store）
-18. ⬜ 实现 `give_up`（含触发 orchestrator 接手 envelope）
-19. ⬜ 填充 `TEAM_TOOL_DISPATCH = {...}`
-20. ⬜ Commit Phase 2：`feat(tools): 新增团队 7 工具（assign/update/list/submit/send/ask/give_up）`
+10. ✅ 创建 `core/team_tools.py`：模块级注释 + 导入 + `TEAM_TOOL_DISPATCH` 字典骨架（值先填 `None`）
+11. ✅ 实现 `_get_task_store(project_dir)` 与 `_get_question_store(project_dir)` 单例缓存
+12. ✅ 实现 `assign_task`（含权限校验 + assignee 存在性校验 + depends_on 校验）
+13. ✅ 实现 `update_task`（含权限校验 + status 白名单校验）
+14. ✅ 实现 `submit_deliverable`（含 content 写文件逻辑 + 触发下游唤醒——下游唤醒挪到 router 层调用，本工具仅返回 ready_downstream 列表给上层）
+15. ✅ 实现 `list_tasks`（输出 markdown 表格）
+16. ✅ 实现 `send_message`（含防洪水 + 自动 CC orchestrator）
+17. ✅ 实现 `ask_user`（含 related_task 切 blocked + 写 question_store）
+18. ✅ 实现 `give_up`（含触发 orchestrator 接手 envelope）
+19. ✅ 填充 `TEAM_TOOL_DISPATCH = {...}`
+20. ✅ Commit Phase 2：`feat(tools): 新增团队 7 工具（assign/update/list/submit/send/ask/give_up）`
 
 ### Phase 3：Router 集成（commit: `feat(router): ...`）
 
