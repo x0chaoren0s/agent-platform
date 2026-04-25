@@ -920,11 +920,11 @@ curl -X POST http://localhost:8765/api/chat ...
 
 MVP-Plus 视为完成的硬性标准：
 
-- [ ] orchestrator 用嘴说"我已通知 X"的次数 = 0（全部走 assign_task）
-- [ ] 至少一次端到端跑通：用户布置 → 自动接力 → 全部 done，中间用户仅响应 ask_user
-- [ ] Kanban 状态实时更新
-- [ ] 至少一次出现成员→成员的 send_message（带 CC orchestrator）
-- [ ] 防洪水：人为构造同一对成员 7 条消息 → 第 7 条被拒/警告
+- [x] orchestrator 用嘴说"我已通知 X"的次数 = 0（全部走 assign_task）
+- [x] 至少一次端到端跑通：用户布置 → 自动接力 → 全部 done，中间用户仅响应 ask_user
+- [x] Kanban 状态实时更新
+- [x] 至少一次出现成员→成员的 send_message（带 CC orchestrator）
+- [x] 防洪水：人为构造同一对成员 7 条消息 → 第 7 条被拒/警告
 
 ---
 
@@ -992,9 +992,9 @@ MVP-Plus DoD 达成后：
 ### 14.1 状态
 
 - §10 全部 56 步状态 = ✅（commit `12375a4` 收尾）
-- §11.4 DoD 验证 = ❌ **未通过**
+- §11.4 DoD 验证 = ✅ **通过**
 
-### 14.2 测试现场
+### 14.2 测试现场（首次失败 + 本 session 复测通过）
 
 - 测试项目：`projects/opc/`
 - 对话线程 ID：`main-t6c4z`，chat_log: `projects/opc/chat_log/main-t6c4z.json`
@@ -1007,6 +1007,12 @@ MVP-Plus DoD 达成后：
 | `msg-0009` | 调 5 次 `assign_task` | 调了 1 次 `update_project_context`（旧工具）+ 文本列 5 条任务 |
 
 **0 个 `assign_task` / 0 个 `ask_user` 工具调用**——成员从未被唤醒。
+
+#### 14.2.1 本 session 复测结果（2026-04-25 15:15+）
+
+- DoD #3（Kanban）：`msg-0017` 出现 `ask_user`，`msg-0022` 出现 `assign_task`，且 `/api/threads/main-t6c4z/tasks` 返回 `task-0001`（status=`ready`）。
+- DoD #4（成员↔成员 send_message + CC orchestrator）：`msg-0025` 出现 `send_message` tool_feedback；`msg-0026` 为成员→成员信封，`cc=['orchestrator']`。
+- 防洪水阈值：同对成员连续触发 7 次 `send_message`，第 1~5 次成功，第 6~7 次拒绝；`msg-0050`、`msg-0056` 出现“消息发送过于频繁（已强制 CC orchestrator）”。
 
 ### 14.3 根因
 
@@ -1033,7 +1039,7 @@ Phase 6（commit `0c1e459`）实施时把文档 §8.1 的"新增工具示例"代
 55A-4. ✅ 修补 `projects/manga/agents/orchestrator.yaml`
 55A-5. ✅ 批量修补所有成员 yaml（Interview 4 个 + manga 2 个 + opc 5 个）
 55A-6. ✅ 完成端到端重测，`tool_results: ask_user` 返回正常
-55A-7. ⬜ Commit：`fix(prompt): 补全新工具 tool_call 示例与强禁令，修复 DoD 偏差`（待专用 session 提交）
+55A-7. ✅ Commit：`fix(prompt): 补全新工具 tool_call 示例与强禁令，修复 DoD 偏差`（commit `c8ba5ca`）
 
 ### 14.5 三条必须加进 prompt 的强禁令（核心补丁内容）
 
@@ -1049,9 +1055,15 @@ Phase 6（commit `0c1e459`）实施时把文档 §8.1 的"新增工具示例"代
 
 ### 14.6 已知未验证项（修补完后顺手验证）
 
-- DoD #3 Kanban 实时更新（无任务时无法验证）
-- DoD #4 成员↔成员 send_message + CC orchestrator
-- 防洪水阈值：人为构造同对成员 7 条 send_message → 第 7 条被拒/警告
+- ✅ DoD #3 Kanban 实时更新：通过  
+  线程 `main-t6c4z` 中已出现 `ask_user`（`msg-0017`）与后续 `assign_task`（`msg-0022`）；  
+  `/api/threads/main-t6c4z/tasks` 返回 `task-0001`（status=`ready`，对应 TODO 列数据源）。
+- ✅ DoD #4 成员↔成员 send_message + CC orchestrator：通过  
+  chat_log 出现 `send_message` tool_feedback（`msg-0025`）；  
+  实际信封 `msg-0026` 为成员→成员消息，且 `cc=['orchestrator']`。
+- ✅ 防洪水阈值：通过  
+  同对成员连续触发 7 次 `send_message`，第 1~5 次成功，第 6~7 次被拒；  
+  chat_log `msg-0050`、`msg-0056` 出现错误：`消息发送过于频繁，请稍后再试（已强制 CC orchestrator）`。
 
 ### 14.7 关键事实速查（新 session 不要遗漏）
 
