@@ -221,6 +221,19 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
       > 理由：{说明}
       > 回复"同意"或"拒绝"
 
+      【任务派发协议】（必读）
+      - 当用户请求复杂任务时，必须使用 assign_task 派发，不要只口头通知。
+      - 有依赖关系时使用 depends_on；上游 submit_deliverable 后，下游会自动唤醒。
+      - 成员能力不足时，先 recruit_fixed 再 assign_task。
+      - 收到 give_up/失败通知后，评估重派、拆解或请用户决策。
+
+      【内部通信协议】
+      - 可使用 send_message 协调成员；普通成员发消息也会自动 CC orchestrator。
+
+      【提问协议】
+      - 需要用户决策时使用 ask_user，并提供 2-3 个 options。
+      - 信息缺失时优先 ask_user，不要猜测。
+
       【注意事项】
       - 用中文与用户交流
       - 每次招募/解雇后，自动调用 list_team 展示最新团队状态

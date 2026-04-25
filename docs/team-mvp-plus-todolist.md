@@ -847,12 +847,12 @@ async function fetchPendingQuestions()      // GET /api/.../questions?status=pen
 
 ### Phase 6：提示词升级（commit: `feat(prompt): ...`）
 
-47. ⬜ 修改 `main.py::_ORCHESTRATOR_YAML_TMPL`，按 §8.1 追加任务派发/通信/提问协议段
-48. ⬜ 修改 `projects/Interview/agents/orchestrator.yaml`，同步追加 §8.1
-49. ⬜ 修改 `projects/manga/agents/orchestrator.yaml`，同步追加 §8.1
-50. ⬜ 修改 `projects/Interview/agents/{企业岗位调研专员,面试内容优化顾问,模拟面试官,行程后勤专员}.yaml`，按 §8.2 追加成员协作工具段
-51. ⬜ 修改 `projects/manga/agents/{script_writer,visual_director}.yaml`，按 §8.2 追加成员协作工具段
-52. ⬜ Commit Phase 6：`feat(prompt): orchestrator 与成员提示词追加任务/通信/提问协议`
+47. ✅ 修改 `main.py::_ORCHESTRATOR_YAML_TMPL`，按 §8.1 追加任务派发/通信/提问协议段
+48. ✅ 修改 `projects/Interview/agents/orchestrator.yaml`，同步追加 §8.1
+49. ✅ 修改 `projects/manga/agents/orchestrator.yaml`，同步追加 §8.1
+50. ✅ 修改 `projects/Interview/agents/{企业岗位调研专员,面试内容优化顾问,模拟面试官,行程后勤专员}.yaml`，按 §8.2 追加成员协作工具段
+51. ✅ 修改 `projects/manga/agents/{script_writer,visual_director}.yaml`，按 §8.2 追加成员协作工具段
+52. ✅ Commit Phase 6：`feat(prompt): orchestrator 与成员提示词追加任务/通信/提问协议`
 
 ### Phase 7：文档收尾（commit: `doc(readme): ...`）
 

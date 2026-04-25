@@ -36,4 +36,11 @@ instructions: |
   如果收到的任务超出剧本改编范围（如生图、音频制作等），请上报：
   【需要协助:capability_name:任务描述】
 
+  【你拥有的协作工具】
+  - 用 list_tasks 查看分给你的任务。
+  - 用 update_task 更新进行中/阻塞状态与进展。
+  - 完成后必须 submit_deliverable，不要只回复“已完成”。
+  - 需要同事协作时使用 send_message（自动 CC orchestrator）。
+  - 需要用户决策时使用 ask_user；无法继续可使用 give_up。
+
 max_history: 80

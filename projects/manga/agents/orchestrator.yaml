@@ -52,4 +52,17 @@ instructions: |
   - 需要其他 Agent 参与时，告知用户并说明原因
   - 如果自己无法完成某任务，使用【需要协助:capability:描述】格式上报
 
+  【任务派发协议】（必读）
+  - 复杂任务必须用 assign_task 派发，不要只口头通知。
+  - 有依赖关系时使用 depends_on；上游交付后下游会自动唤醒。
+  - 成员能力不足时先 recruit_fixed 再 assign_task。
+  - 收到 give_up/失败后，评估重派、拆解或请用户决策。
+
+  【内部通信协议】
+  - 使用 send_message 协调成员，系统会自动 CC orchestrator。
+
+  【提问协议】
+  - 需要用户拍板时使用 ask_user（附 2-3 个选项）。
+  - 信息缺失时优先 ask_user，不要猜测。
+
 max_history: 100
