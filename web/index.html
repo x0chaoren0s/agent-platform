@@ -420,6 +420,7 @@
     <!-- Agent section -->
     <div class="section-header">
       <h2>团队成员</h2>
+      <button class="icon-btn" id="teamPauseBtn" title="暂停/恢复团队心跳" onclick="toggleThreadPause()">▶ 团队工作中</button>
       <button class="add-agent-btn" title="手动添加成员" onclick="openAddAgentModal()">＋</button>
     </div>
     <div class="agent-list" id="agentList">
@@ -512,6 +513,8 @@ let tempAgentNames = new Set();
 let pendingImages = [];   // {dataUri, objectUrl} — images queued for next send
 let latestTasks = [];
 let pendingQuestions = [];
+let threadPaused = false;
+let heartbeatSilentCount = 0;
 
 // Stable thread_id per project, persisted in localStorage
 function getThreadId(project) {
@@ -538,6 +541,43 @@ function showToast(msg, ms=2500) {
   setTimeout(() => t.classList.remove('show'), ms);
 }
 function scrollBottom() { el('msgList').scrollTop = el('msgList').scrollHeight; }
+
+function renderThreadPauseState() {
+  const btn = el('teamPauseBtn');
+  if (!btn) return;
+  if (threadPaused) {
+    btn.textContent = `⏸ 团队已暂停`;
+    btn.title = '点击恢复团队心跳';
+    btn.style.color = '#fbbf24';
+  } else {
+    btn.textContent = heartbeatSilentCount > 0 ? `▶ 团队工作中 (${heartbeatSilentCount})` : '▶ 团队工作中';
+    btn.title = '点击暂停团队心跳';
+    btn.style.color = '';
+  }
+}
+
+async function fetchThreadStatus() {
+  const res = await fetch(`/api/threads/${encodeURIComponent(THREAD_ID)}/status`);
+  const data = await res.json();
+  threadPaused = Boolean(data && data.is_paused);
+  heartbeatSilentCount = Number((data && data.silent_task_count) || 0);
+  renderThreadPauseState();
+}
+
+async function toggleThreadPause() {
+  const endpoint = threadPaused ? 'resume' : 'pause';
+  const res = await fetch(`/api/threads/${encodeURIComponent(THREAD_ID)}/${endpoint}`, {
+    method: 'POST',
+  });
+  const data = await res.json();
+  if (!data || !data.ok) {
+    showToast((data && data.error) || '操作失败');
+    return;
+  }
+  threadPaused = Boolean(data.is_paused);
+  renderThreadPauseState();
+  showToast(threadPaused ? '团队已暂停心跳' : '团队已恢复心跳');
+}
 
 // ── Thread management ────────────────────────────────────────────────────────
 function _reconnectForProject(name) {
@@ -950,6 +990,25 @@ async function dismissAgent(name) {
   appendSysMsg(`成员 ${name} 已离开团队`);
 }
 
+async function fetchAgentsOnce() {
+  const res = await fetch('/api/agents');
+  if (!res.ok) return null;
+  const data = await res.json();
+  const agents = (data && data.agents) || [];
+  renderAgents(agents);
+  return agents;
+}
+
+async function refreshAgentsWithRetry(retries = 4, delayMs = 300) {
+  for (let i = 0; i < retries; i++) {
+    const agents = await fetchAgentsOnce();
+    if (agents && agents.length > 1) return;
+    if (i < retries - 1) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 // ── Selection ────────────────────────────────────────────────────────────────
 function toggleRole(agentName, role) {
   selection[agentName] = selection[agentName] === role ? null : role;
@@ -1149,6 +1208,7 @@ function appendMessage(env) {
         <div class="tc-fold-body">${blocks.map(b => `<pre class="tc-pre">${escHtml(b)}</pre>`).join('')}</div>
       </div>`
     : '';
+  const hasMainBubble = Boolean(cleaned.trim() || imgsHtml);
 
   const pinTitle = isUser
     ? '检查点=此条用户消息出现之前的对话'
@@ -1163,7 +1223,7 @@ function appendMessage(env) {
       <span>${(env.timestamp||'').slice(11,19)}</span>
     </div>
     ${toolCallsHtml}
-    <div class="bubble">${escHtml(cleaned)}${imgsHtml}</div>
+    ${hasMainBubble ? `<div class="bubble">${escHtml(cleaned)}${imgsHtml}</div>` : ''}
     ${pinBtn}`;
   el('msgList').appendChild(wrap);
   scrollBottom();
@@ -1451,6 +1511,8 @@ function appendDelta(name, delta) {
     }
   }
 
+  const toolOnlyStreaming = !cleaned.trim() && (toolBlocks.length > 0 || partial != null);
+  s.mainEl.style.display = toolOnlyStreaming ? 'none' : '';
   s.mainEl.textContent = cleaned;
   updateStreamToolCallFold(name, toolBlocks, partial);
   const charsEl = document.getElementById('schars-' + name);
@@ -1514,12 +1576,17 @@ function connect() {
       fetchConversations();
       fetchTasks();
       fetchPendingQuestions();
+      fetchThreadStatus();
       return;
     }
     if (ev.type === 'envelope_recorded') {
       appendMessage(ev.envelope);
-      (ev.envelope.to||[]).forEach(n => { if (n !== 'user') startStreamBubble(n); });
-      (ev.envelope.cc||[]).forEach(n => { if (n !== 'user') startStreamBubble(n); });
+      // system_advisory envelopes are injected into agent inbox but the agent
+      // does not start streaming immediately — skip pre-emptive bubble creation
+      if (!ev.envelope.metadata?.system_advisory) {
+        (ev.envelope.to||[]).forEach(n => { if (n !== 'user') startStreamBubble(n); });
+        (ev.envelope.cc||[]).forEach(n => { if (n !== 'user') startStreamBubble(n); });
+      }
       return;
     }
     if (ev.type === 'text_delta') { appendDelta(ev.agent, ev.delta); return; }
@@ -1527,10 +1594,15 @@ function connect() {
     if (ev.type === 'agent_done') { finalizeStream(ev.agent, ev.envelope); return; }
     if (ev.type === 'tool_result') {
       appendToolResult(ev.tool, ev.result, ev.triggered_by);
+      if (ev.tool === 'recruit_fixed' || ev.tool === 'dismiss_member') {
+        refreshAgentsWithRetry();
+      }
       return;
     }
     if (ev.type === 'agents_updated') {
       renderAgents(ev.agents || []);
+      // Hot-reload may lag a little; retry pull once in background for consistency.
+      refreshAgentsWithRetry(3, 250);
       showToast('团队成员已更新');
       return;
     }
@@ -1571,6 +1643,16 @@ function connect() {
     }
     if (ev.type === 'internal_message') {
       if (ev.envelope) appendMessage(ev.envelope);
+      return;
+    }
+    if (ev.type === 'thread_paused') {
+      threadPaused = Boolean(ev.is_paused);
+      renderThreadPauseState();
+      return;
+    }
+    if (ev.type === 'heartbeat') {
+      heartbeatSilentCount = Number(ev.silent_count || 0);
+      renderThreadPauseState();
       return;
     }
     if (ev.type === 'error') {

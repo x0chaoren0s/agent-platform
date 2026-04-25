@@ -60,6 +60,8 @@ from core.platform_tools import (
     recruit_temp,
     update_project_context,
 )
+from core.heartbeat import HeartbeatScheduler
+from core.red_actions import RED_ACTIONS, check_confirm
 from core.question_store import QuestionStore
 from core.task_store import TaskStore
 
@@ -81,6 +83,7 @@ _routers: dict[str, MessageRouter] = {}
 _active_websockets: dict[str, WebSocket] = {}  # thread_id → active websocket
 _task_stores: dict[str, TaskStore] = {}
 _question_stores: dict[str, QuestionStore] = {}
+_heartbeat_scheduler: HeartbeatScheduler | None = None
 
 
 def _project_dir(name: str) -> Path:
@@ -117,9 +120,34 @@ def _get_router(thread_id: str) -> MessageRouter:
             session_store=_session_store,
             thread_id=thread_id,
             log_path=log_path,
+            broadcaster=_ws_broadcast,
         )
-        team_tools.set_router(thread_id, _routers[thread_id])
+        team_tools.set_router(thread_id, _routers[thread_id], project_dir=str(pdir))
     return _routers[thread_id]
+
+
+def _normalize_agent_filename(name: str) -> str:
+    return str(name or "").strip().replace(" ", "_").replace("-", "_")
+
+
+def _sync_registry_after_member_change(*, project_dir: Path, action: str, name: str) -> None:
+    """
+    Keep registry in sync immediately after recruit/dismiss so UI does not
+    depend on watchdog timing.
+    """
+    if _registry is None:
+        return
+    safe_name = _normalize_agent_filename(name)
+    if not safe_name:
+        return
+    yaml_path = project_dir / "agents" / f"{safe_name}.yaml"
+    try:
+        if action == "recruit" and yaml_path.exists():
+            _registry._load_file(yaml_path)  # noqa: SLF001 - intentional sync hook
+        elif action == "dismiss":
+            _registry._unload_file(yaml_path)  # noqa: SLF001 - intentional sync hook
+    except Exception:
+        logger.exception("Failed to sync registry after %s: %s", action, safe_name)
 
 
 async def _get_task_store(thread_id: str) -> TaskStore:
@@ -129,6 +157,17 @@ async def _get_task_store(thread_id: str) -> TaskStore:
     store = _task_stores.get(key)
     if store is None:
         store = TaskStore(db_path=pdir / "memory" / "tasks.db", project=_current_project)
+        await store.init_db()
+        _task_stores[key] = store
+    return store
+
+
+async def _get_task_store_by_project_dir(project_dir_str: str) -> TaskStore:
+    pdir = Path(project_dir_str)
+    key = str(pdir.resolve())
+    store = _task_stores.get(key)
+    if store is None:
+        store = TaskStore(db_path=pdir / "memory" / "tasks.db", project=pdir.name)
         await store.init_db()
         _task_stores[key] = store
     return store
@@ -152,12 +191,29 @@ async def _get_question_store(thread_id: str) -> QuestionStore:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _heartbeat_scheduler
     _activate(_current_project)
     if _conv_store:
         await _conv_store.init_db()
     if _checkpoint_store:
         await _checkpoint_store.init_db()
+    if _conv_store:
+        _heartbeat_scheduler = HeartbeatScheduler(
+            interval_seconds=5,
+            thresholds_seconds={"high": 20, "normal": 10, "low": 120},
+            advisory_min_gap_seconds=60,
+            conversation_store=_conv_store,
+            thread_ids_provider=lambda: list(_routers.keys()),
+            project_dir_provider=team_tools.get_project_dir,
+            router_provider=lambda tid: _routers.get(tid),
+            task_store_provider=_get_task_store_by_project_dir,
+            broadcaster=_ws_broadcast,
+        )
+        await _heartbeat_scheduler.start()
     yield
+    if _heartbeat_scheduler:
+        await _heartbeat_scheduler.stop()
+        _heartbeat_scheduler = None
     if _registry:
         _registry.stop_watching()
     logger.info("Agent platform stopped.")
@@ -255,6 +311,32 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
       ```tool_call
       {"tool": "ask_user", "args": {"question": "您简历更想突出哪个方向？", "options": [{"id": "tech", "label": "技术深度"}, {"id": "product", "label": "产品视角"}], "urgency": "high"}}
       ```
+
+      【红色操作协议】（不可逆动作，必须先确认）
+      - 以下工具属于红色操作：dismiss_member、recruit_fixed、update_project_context。
+      - 调用上述工具前，必须先 ask_user 且 question 文本中包含确认标记（marker），并等待用户回答 "yes"。
+      - 若未满足该条件，服务器会拒绝执行。
+      - marker 规范：
+        - dismiss_member: [[confirm:dismiss:成员名]]
+        - recruit_fixed: [[confirm:recruit:成员名]]
+        - update_project_context: [[confirm:context:rewrite]]
+
+      ```tool_call
+      {"tool": "ask_user", "args": {"question": "请确认是否解雇成员A [[confirm:dismiss:成员A]]", "options": [{"id": "yes", "label": "确认"}, {"id": "no", "label": "取消"}], "urgency": "high"}}
+      ```
+      ```tool_call
+      {"tool": "ask_user", "args": {"question": "请确认是否新增固定成员B [[confirm:recruit:成员B]]", "options": [{"id": "yes", "label": "确认"}, {"id": "no", "label": "取消"}], "urgency": "high"}}
+      ```
+      ```tool_call
+      {"tool": "ask_user", "args": {"question": "请确认是否覆盖项目背景 [[confirm:context:rewrite]]", "options": [{"id": "yes", "label": "确认"}, {"id": "no", "label": "取消"}], "urgency": "high"}}
+      ```
+
+      【协调升级路径（必须按顺序尝试，禁止跳步）】
+      当成员沉默、表现异常或任务受阻时，按下面顺序依次尝试，前一步无效再升级：
+      1. send_message：先发一条简短消息询问是否遇到困难、需要什么支持。
+      2. update_task：在任务上记录 progress_note，标记你已介入协调。
+      3. ask_user：若两步无果，向用户发起决策问题（如等待/替换成员/调整任务）。
+      4. dismiss_member：仅在用户明确选择后执行，且必须先走红色操作协议拿到 confirm marker。
 
       【硬性约束 - 违反视为错误】
       1. 派发任务时必须一条一条调用 assign_task 工具，禁止用 markdown 列表"列任务"代替；
@@ -737,12 +819,69 @@ async def _execute_tool(
     caller_agent: str,
 ) -> str:
     pdir_str = str(project_dir)
+    if tool_name in RED_ACTIONS:
+        qstore = await _get_question_store(thread_id)
+        allowed, reason = await check_confirm(
+            qstore,
+            thread_id=thread_id,
+            tool_name=tool_name,
+            args=args,
+            max_age_seconds=60,
+        )
+        if not allowed:
+            return reason
     if tool_name == "list_team":
         return list_team(pdir_str)
     elif tool_name == "recruit_fixed":
-        return recruit_fixed(project_dir=pdir_str, **args)
+        result = recruit_fixed(project_dir=pdir_str, **args)
+        if not result.startswith("错误："):
+            _sync_registry_after_member_change(
+                project_dir=project_dir,
+                action="recruit",
+                name=str(args.get("name", "")),
+            )
+        return result
     elif tool_name == "dismiss_member":
-        return dismiss_member(project_dir=pdir_str, **args)
+        result = dismiss_member(project_dir=pdir_str, **args)
+        if not result.startswith("错误："):
+            dismissed_name = str(args.get("name", ""))
+            _sync_registry_after_member_change(
+                project_dir=project_dir,
+                action="dismiss",
+                name=dismissed_name,
+            )
+            # Auto-reassign active tasks to orchestrator
+            if dismissed_name and _registry is not None:
+                orchestrator_name = _registry.get_orchestrator_name() or "orchestrator"
+                try:
+                    store = await _get_task_store(thread_id)
+                    transferred = await store.reassign_member_tasks(
+                        thread_id, dismissed_name, orchestrator_name, "platform"
+                    )
+                    if transferred:
+                        task_lines = "\n".join(
+                            f"- {t.id}《{t.title}》(priority={t.priority})"
+                            for t in transferred
+                        )
+                        advisory_text = (
+                            f"成员 {dismissed_name} 已离职，以下 {len(transferred)} 个任务已自动转交给你，"
+                            f"请重新评估并安排：\n{task_lines}"
+                        )
+                        router = _routers.get(thread_id)
+                        if router is not None:
+                            env_dict = router.record_system_advisory(
+                                to_agent=orchestrator_name,
+                                text=advisory_text,
+                                metadata={"auto_reassign": True},
+                            )
+                            if env_dict:
+                                asyncio.create_task(_ws_broadcast(
+                                    thread_id,
+                                    {"type": "envelope_recorded", "envelope": env_dict},
+                                ))
+                except Exception:
+                    logger.exception("Failed to auto-reassign tasks after dismiss")
+        return result
     elif tool_name == "recruit_temp":
         return recruit_temp(project_dir=pdir_str, **args)
     elif tool_name == "update_project_context":
@@ -759,12 +898,23 @@ async def _execute_tool(
         return await kb_mod.kb_search(project_dir=project_dir, **args)
     elif tool_name in team_tools.TEAM_TOOL_DISPATCH:
         fn = team_tools.TEAM_TOOL_DISPATCH[tool_name]
-        return await fn(
-            project_dir=pdir_str,
-            thread_id=thread_id,
-            caller_agent=caller_agent,
-            **args,
-        )
+        try:
+            return await fn(
+                project_dir=pdir_str,
+                thread_id=thread_id,
+                caller_agent=caller_agent,
+                **args,
+            )
+        except TypeError as exc:
+            return (
+                f"工具调用参数错误（{tool_name}）：{exc}。请检查必填字段并重试。\n"
+                "建议立即调用 list_tasks(scope='mine') 查看当前任务实际状态，避免基于错误假设继续推进。"
+            )
+        except Exception as exc:
+            return (
+                f"工具调用异常（{tool_name}）：{exc}\n"
+                "建议立即调用 list_tasks(scope='mine') 查看当前任务实际状态，避免基于错误假设继续推进。"
+            )
     else:
         return f"未知工具：{tool_name}"
 
@@ -780,6 +930,39 @@ def get_log(thread_id: str = "default"):
 
 class AnswerQuestionRequest(BaseModel):
     answer: str
+
+
+@app.post("/api/threads/{thread_id}/pause")
+async def api_pause_thread(thread_id: str):
+    if _conv_store is None:
+        return {"ok": False, "error": "conversation store not initialized"}
+    updated = await _conv_store.set_paused(thread_id, True)
+    if not updated:
+        return {"ok": False, "error": f"thread not found: {thread_id}"}
+    await _ws_broadcast(thread_id, {"type": "thread_paused", "is_paused": True})
+    return {"ok": True, "is_paused": True}
+
+
+@app.post("/api/threads/{thread_id}/resume")
+async def api_resume_thread(thread_id: str):
+    if _conv_store is None:
+        return {"ok": False, "error": "conversation store not initialized"}
+    updated = await _conv_store.set_paused(thread_id, False)
+    if not updated:
+        return {"ok": False, "error": f"thread not found: {thread_id}"}
+    await _ws_broadcast(thread_id, {"type": "thread_paused", "is_paused": False})
+    return {"ok": True, "is_paused": False}
+
+
+@app.get("/api/threads/{thread_id}/status")
+async def api_thread_status(thread_id: str):
+    is_paused = False
+    if _conv_store is not None:
+        is_paused = await _conv_store.is_paused(thread_id)
+    silent_count = 0
+    if _heartbeat_scheduler is not None:
+        silent_count = _heartbeat_scheduler.get_last_silent_count(thread_id)
+    return {"ok": True, "is_paused": is_paused, "silent_task_count": silent_count}
 
 
 @app.get("/api/threads/{thread_id}/tasks")
@@ -1018,7 +1201,11 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
                         await websocket.send_text(json.dumps(feedback_event, ensure_ascii=False))
 
                     if tool_results:
-                        # Send updated agent list so UI refreshes
+                        # Send updated agent list so UI refreshes.
+                        # recruit/dismiss relies on watchdog hot-reload, so registry update may lag slightly.
+                        tool_names = {tr.get("tool", "") for tr in tool_results}
+                        if {"recruit_fixed", "dismiss_member"} & tool_names:
+                            await asyncio.sleep(0.35)
                         await websocket.send_text(json.dumps({
                             "type": "agents_updated",
                             "agents": _registry.list_info(),
