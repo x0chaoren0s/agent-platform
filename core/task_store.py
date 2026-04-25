@@ -57,6 +57,16 @@ CREATE TABLE IF NOT EXISTS task_history (
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_history_task ON task_history(task_id, ts);
+
+CREATE TABLE IF NOT EXISTS task_advisory (
+    task_id           TEXT PRIMARY KEY,
+    last_advisory_ts  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_orphan_advisory (
+    task_id           TEXT PRIMARY KEY,
+    last_advisory_ts  TEXT NOT NULL
+);
 """
 
 
@@ -346,6 +356,51 @@ class TaskStore:
                 ready_tasks.append(task)
         return ready_tasks
 
+    async def reassign_member_tasks(
+        self,
+        thread_id: str,
+        from_assignee: str,
+        to_assignee: str,
+        actor: str,
+    ) -> list[Task]:
+        """Batch-reassign all active tasks from a departing member to a new assignee."""
+        now = datetime.now().isoformat(timespec="seconds")
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute("PRAGMA foreign_keys=ON")
+            async with db.execute(
+                """
+                SELECT id FROM tasks
+                 WHERE thread_id = ?
+                   AND assignee = ?
+                   AND status IN ('ready', 'in_progress', 'blocked_on_user')
+                """,
+                (thread_id, from_assignee),
+            ) as cur:
+                rows = await cur.fetchall()
+            task_ids = [row[0] for row in rows]
+            for task_id in task_ids:
+                await db.execute(
+                    "UPDATE tasks SET assignee = ?, updated_at = ? WHERE id = ?",
+                    (to_assignee, now, task_id),
+                )
+                await db.execute(
+                    "INSERT INTO task_history(task_id, ts, event, actor, note) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        task_id,
+                        now,
+                        "reassigned",
+                        actor,
+                        f"原负责人 {from_assignee} 已离职，自动转交给 {to_assignee}",
+                    ),
+                )
+            await db.commit()
+        result: list[Task] = []
+        for task_id in task_ids:
+            task = await self.get(task_id)
+            if task:
+                result.append(task)
+        return result
+
     async def list_pending_by_assignee(self, thread_id: str, assignee: str) -> list[Task]:
         return await self.list(thread_id=thread_id, status="pending", assignee=assignee)
 
@@ -358,6 +413,109 @@ class TaskStore:
             ) as cur:
                 rows = await cur.fetchall()
         return [TaskHistoryEntry(**dict(row)) for row in rows]
+
+    async def list_silent_tasks(
+        self,
+        *,
+        thread_id: str,
+        now_iso: str,
+        thresholds_seconds: dict[str, int],
+        advisory_min_gap_seconds: int,
+    ) -> list[Task]:
+        high_threshold = int(thresholds_seconds.get("high", 600))
+        normal_threshold = int(thresholds_seconds.get("normal", 1800))
+        low_threshold = int(thresholds_seconds.get("low", 7200))
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT t.*
+                  FROM tasks t
+                  LEFT JOIN task_advisory a ON a.task_id = t.id
+                 WHERE t.thread_id = ?
+                   AND t.status IN ('ready', 'in_progress', 'blocked_on_user')
+                   AND (julianday(?) - julianday(t.updated_at)) * 86400.0 >=
+                       CASE
+                           WHEN t.priority = 'high' THEN ?
+                           WHEN t.priority = 'low' THEN ?
+                           ELSE ?
+                       END
+                   AND (
+                       a.last_advisory_ts IS NULL OR
+                       (julianday(?) - julianday(a.last_advisory_ts)) * 86400.0 >= ?
+                   )
+                 ORDER BY t.updated_at ASC
+                """,
+                (
+                    thread_id,
+                    now_iso,
+                    high_threshold,
+                    low_threshold,
+                    normal_threshold,
+                    now_iso,
+                    advisory_min_gap_seconds,
+                ),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [self._row_to_task(row) for row in rows]
+
+    async def mark_advisory_sent(self, task_id: str, ts_iso: str) -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO task_advisory(task_id, last_advisory_ts)
+                VALUES (?, ?)
+                ON CONFLICT(task_id) DO UPDATE SET last_advisory_ts = excluded.last_advisory_ts
+                """,
+                (task_id, ts_iso),
+            )
+            await db.commit()
+
+    async def get_last_advisory_ts(self, task_id: str) -> str | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT last_advisory_ts FROM task_advisory WHERE task_id = ?",
+                (task_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        return str(row[0]) if row and row[0] else None
+
+    async def mark_orphan_advisory_sent(self, task_id: str, ts_iso: str) -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO task_orphan_advisory(task_id, last_advisory_ts)
+                VALUES (?, ?)
+                ON CONFLICT(task_id) DO UPDATE SET last_advisory_ts = excluded.last_advisory_ts
+                """,
+                (task_id, ts_iso),
+            )
+            await db.commit()
+
+    async def get_last_orphan_advisory_ts(self, task_id: str) -> str | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                "SELECT last_advisory_ts FROM task_orphan_advisory WHERE task_id = ?",
+                (task_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        return str(row[0]) if row and row[0] else None
+
+    async def list_active_tasks(self, thread_id: str) -> list[Task]:
+        """Return all non-closed tasks for the thread (no advisory filter)."""
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT * FROM tasks
+                 WHERE thread_id = ?
+                   AND status IN ('ready', 'in_progress', 'blocked_on_user')
+                 ORDER BY created_at ASC
+                """,
+                (thread_id,),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [self._row_to_task(row) for row in rows]
 
     def write_deliverable_file(self, relative_path: str, content: str) -> str:
         normalized = self._normalize_workspace_path(relative_path)

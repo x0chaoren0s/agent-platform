@@ -149,6 +149,33 @@ class QuestionStore:
             )
             await db.commit()
 
+    async def find_recent_answered_with_marker(
+        self,
+        *,
+        thread_id: str,
+        marker: str,
+        since_ts_iso: str,
+    ) -> UserQuestion | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT *
+                  FROM user_questions
+                 WHERE thread_id = ?
+                   AND status = 'answered'
+                   AND answered_at >= ?
+                   AND question LIKE ?
+                 ORDER BY answered_at DESC
+                 LIMIT 1
+                """,
+                (thread_id, since_ts_iso, f"%{marker}%"),
+            ) as cur:
+                row = await cur.fetchone()
+        if not row:
+            return None
+        return self._row_to_question(row)
+
     async def _next_question_id(self) -> str:
         async with aiosqlite.connect(self._db_path) as db:
             async with db.execute(

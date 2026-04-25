@@ -1,8 +1,6 @@
 """Team collaboration tools for MVP-Plus tasking and communication."""
 
 from __future__ import annotations
-
-import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -14,15 +12,18 @@ from .task_store import Task, TaskStore
 _TASK_STORES: dict[str, TaskStore] = {}
 _QUESTION_STORES: dict[str, QuestionStore] = {}
 _ROUTERS: dict[str, Any] = {}
+_THREAD_PROJECT_DIR: dict[str, str] = {}
 _BROADCASTER: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
 
-_FLOOD_WINDOW_SECONDS = 300
-_FLOOD_LIMIT = 6
-_RECENT_MSGS: dict[tuple[str, tuple[str, ...]], list[float]] = {}
 
-
-def set_router(thread_id: str, router: Any) -> None:
+def set_router(thread_id: str, router: Any, *, project_dir: str | None = None) -> None:
     _ROUTERS[thread_id] = router
+    if project_dir:
+        _THREAD_PROJECT_DIR[thread_id] = project_dir
+
+
+def get_project_dir(thread_id: str) -> str | None:
+    return _THREAD_PROJECT_DIR.get(thread_id)
 
 
 def set_broadcaster(
@@ -110,6 +111,10 @@ async def assign_task(
     priority: str = "normal",
     **kwargs: Any,  # 兼容性：忽略未知参数如 task
 ) -> str:
+    if not title or not str(title).strip():
+        return "错误：assign_task 必须包含 title 字段，请检查 args。"
+    if not brief or not str(brief).strip():
+        return "错误：assign_task 必须包含 brief 字段，请检查 args。"
     pdir = Path(project_dir)
     orchestrator = _orchestrator_name(pdir)
     if caller_agent != orchestrator:
@@ -151,6 +156,10 @@ async def update_task(
     progress_note: str | None = None,
     **kwargs: Any,
 ) -> str:
+    if not task_id or not str(task_id).strip():
+        return "错误：update_task 必须包含 task_id 字段，请检查 args。"
+    if not status and not progress_note:
+        return "错误：update_task 至少需要 status 或 progress_note 之一。"
     _ = thread_id
     store = await _get_task_store(project_dir)
     task = await store.get(task_id)
@@ -181,6 +190,10 @@ async def submit_deliverable(
     summary: str,
     **kwargs: Any,
 ) -> str:
+    if not task_id or not str(task_id).strip():
+        return "错误：submit_deliverable 必须包含 task_id 字段，请检查 args。"
+    if not summary or not str(summary).strip():
+        return "错误：submit_deliverable 必须包含 summary 字段，请检查 args。"
     _ = thread_id
     store = await _get_task_store(project_dir)
     task = await store.get(task_id)
@@ -263,16 +276,12 @@ async def send_message(
     final_cc = sorted(set(cc or []))
     if caller_agent != orchestrator and orchestrator not in final_cc:
         final_cc.append(orchestrator)
-    key = (caller_agent, tuple(clean_to))
-    now = time.time()
-    recent = [ts for ts in _RECENT_MSGS.get(key, []) if now - ts <= _FLOOD_WINDOW_SECONDS]
-    if len(recent) >= _FLOOD_LIMIT:
-        if orchestrator not in final_cc:
-            final_cc.append(orchestrator)
-        return f"错误：消息发送过于频繁，请稍后再试（已强制 CC {orchestrator}）"
-    recent.append(now)
-    _RECENT_MSGS[key] = recent
     router = _ROUTERS.get(thread_id)
+    if router is not None and hasattr(router, "check_flood"):
+        if router.check_flood(sender=caller_agent, to=clean_to):
+            if orchestrator not in final_cc:
+                final_cc.append(orchestrator)
+            return f"错误：消息发送过于频繁，请稍后再试（已强制 CC {orchestrator}）"
     metadata = {"related_task": related_task} if related_task else {}
     if router is not None and hasattr(router, "dispatch_internal"):
         await router.dispatch_internal(

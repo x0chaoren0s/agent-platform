@@ -54,13 +54,20 @@ class ConversationStore:
                     project     TEXT NOT NULL,
                     name        TEXT NOT NULL,
                     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    last_active DATETIME DEFAULT CURRENT_TIMESTAMP
+                    last_active DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    is_paused   INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
             await db.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_conv_project ON {_TABLE}(project)"
             )
+            try:
+                await db.execute(
+                    f"ALTER TABLE {_TABLE} ADD COLUMN is_paused INTEGER NOT NULL DEFAULT 0"
+                )
+            except aiosqlite.OperationalError:
+                pass
             await db.commit()
         logger.debug("ConversationStore initialized at %s", self._db_path)
 
@@ -130,3 +137,26 @@ class ConversationStore:
                 (now, thread_id),
             )
             await db.commit()
+
+    async def set_paused(self, thread_id: str, paused: bool) -> bool:
+        await self._ensure_ready()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                f"UPDATE {_TABLE} SET is_paused = ? WHERE thread_id = ?",
+                (1 if paused else 0, thread_id),
+            )
+            await db.commit()
+            changes = db.total_changes
+        return changes > 0
+
+    async def is_paused(self, thread_id: str) -> bool:
+        await self._ensure_ready()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                f"SELECT is_paused FROM {_TABLE} WHERE thread_id = ?",
+                (thread_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        if not row:
+            return False
+        return bool(row[0])

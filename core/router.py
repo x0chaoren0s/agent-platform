@@ -104,6 +104,7 @@ class MessageRouter:
         thread_id: str = "default",
         log_path: Path | None = None,
         max_inbox_messages: int = 60,
+        broadcaster: Any | None = None,
     ) -> None:
         self._registry = registry
         self._session_store = session_store
@@ -114,6 +115,7 @@ class MessageRouter:
         self._temp_agents: set[str] = set()
         self._flush_lock = asyncio.Lock()
         self._max_inbox_messages = max_inbox_messages
+        self._broadcaster = broadcaster
         # per-agent rolling summary cache: agent_name → summary markdown
         self._inbox_summary: dict[str, str] = {}
         self._recent_msgs: dict[tuple[str, tuple[str, ...]], list[float]] = {}
@@ -295,14 +297,17 @@ class MessageRouter:
         metadata = dict(metadata or {})
         dedup_to = list(dict.fromkeys([name for name in to if name]))
         dedup_cc = list(dict.fromkeys([name for name in cc if name and name not in dedup_to]))
-        flood_warning = self._check_flood(sender=sender, to=dedup_to)
+        flood_warning = self.check_flood(sender=sender, to=dedup_to)
         if flood_warning:
             metadata["flood_warning"] = True
             orchestrator = self._registry.get_orchestrator_name()
             if orchestrator and orchestrator != sender and orchestrator not in dedup_cc:
                 dedup_cc.append(orchestrator)
+        broadcaster = self._broadcaster
+        thread_id = self._thread_id
+
         async def _consume() -> None:
-            async for _ in self._dispatch_inner(
+            async for event in self._dispatch_inner(
                 sender=sender,
                 to=dedup_to,
                 cc=dedup_cc,
@@ -311,7 +316,11 @@ class MessageRouter:
                 images=images or [],
                 _depth=0,
             ):
-                pass
+                if broadcaster is not None:
+                    try:
+                        await broadcaster(thread_id, event)
+                    except Exception:
+                        pass
         asyncio.create_task(_consume())
 
     async def notify_assignee(self, task: dict[str, Any]) -> None:
@@ -510,7 +519,7 @@ class MessageRouter:
             events.append(event)
         return events
 
-    def _check_flood(self, sender: str, to: list[str]) -> bool:
+    def check_flood(self, sender: str, to: list[str]) -> bool:
         now = datetime.now().timestamp()
         key = (sender, tuple(sorted(set(to))))
         window_seconds = 300
@@ -540,6 +549,30 @@ class MessageRouter:
             cc=[],
             content=content,
             metadata={"tool_feedback": True},
+        )
+        self._global_log.append(envelope)
+        self._flush_log()
+        return envelope.to_dict()
+
+    def record_system_advisory(
+        self,
+        *,
+        to_agent: str,
+        text: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if not (to_agent or "").strip() or not (text or "").strip():
+            return None
+        final_metadata = {"system_advisory": True}
+        if metadata:
+            final_metadata.update(metadata)
+        envelope = Envelope(
+            id=self._next_id(),
+            sender="platform",
+            to=[to_agent],
+            cc=[],
+            content=text,
+            metadata=final_metadata,
         )
         self._global_log.append(envelope)
         self._flush_log()
