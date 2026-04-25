@@ -116,6 +116,7 @@ class MessageRouter:
         self._max_inbox_messages = max_inbox_messages
         # per-agent rolling summary cache: agent_name → summary markdown
         self._inbox_summary: dict[str, str] = {}
+        self._recent_msgs: dict[tuple[str, tuple[str, ...]], list[float]] = {}
         # Load persisted log if available
         if log_path is not None:
             self._load_log()
@@ -281,6 +282,53 @@ class MessageRouter:
             images=images or [],
         ):
             yield event
+
+    async def dispatch_internal(
+        self,
+        sender: str,
+        to: list[str],
+        cc: list[str],
+        content: str,
+        metadata: dict[str, Any] | None = None,
+        images: list[str] | None = None,
+    ) -> None:
+        metadata = dict(metadata or {})
+        dedup_to = list(dict.fromkeys([name for name in to if name]))
+        dedup_cc = list(dict.fromkeys([name for name in cc if name and name not in dedup_to]))
+        flood_warning = self._check_flood(sender=sender, to=dedup_to)
+        if flood_warning:
+            metadata["flood_warning"] = True
+            orchestrator = self._registry.get_orchestrator_name()
+            if orchestrator and orchestrator != sender and orchestrator not in dedup_cc:
+                dedup_cc.append(orchestrator)
+        async def _consume() -> None:
+            async for _ in self._dispatch_inner(
+                sender=sender,
+                to=dedup_to,
+                cc=dedup_cc,
+                content=content,
+                metadata=metadata,
+                images=images or [],
+                _depth=0,
+            ):
+                pass
+        asyncio.create_task(_consume())
+
+    async def notify_assignee(self, task: dict[str, Any]) -> None:
+        task_id = str(task.get("id", ""))
+        assignee = str(task.get("assignee", ""))
+        title = str(task.get("title", "")).strip() or "未命名任务"
+        brief = str(task.get("brief", "")).strip()
+        deadline = task.get("deadline")
+        ddl_text = f"\nDDL: {deadline}" if deadline else ""
+        content = f"【新任务】{task_id} - {title}\n{brief}{ddl_text}".strip()
+        await self.dispatch_internal(
+            sender="orchestrator",
+            to=[assignee],
+            cc=[],
+            content=content,
+            metadata={"type": "task_assignment", "task_id": task_id},
+        )
 
     async def _dispatch_inner(
         self,
@@ -461,6 +509,18 @@ class MessageRouter:
         async for event in self._run_agent(**kwargs):
             events.append(event)
         return events
+
+    def _check_flood(self, sender: str, to: list[str]) -> bool:
+        now = datetime.now().timestamp()
+        key = (sender, tuple(sorted(set(to))))
+        window_seconds = 300
+        limit = 6
+        recent = [ts for ts in self._recent_msgs.get(key, []) if now - ts <= window_seconds]
+        is_flood = len(recent) >= limit
+        if not is_flood:
+            recent.append(now)
+        self._recent_msgs[key] = recent
+        return is_flood
 
     def record_tool_feedback(self, triggered_by: str, tool_results: list[dict[str, str]]) -> dict[str, Any] | None:
         """

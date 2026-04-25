@@ -812,13 +812,13 @@ async function fetchPendingQuestions()      // GET /api/.../questions?status=pen
 
 ### Phase 3：Router 集成（commit: `feat(router): ...`）
 
-21. ⬜ 在 `core/router.py` 新增 `notify_assignee(task: dict) -> None` 方法：构造 `【新任务】task-XXXX ...` envelope → `dispatch_internal` 给 assignee
-22. ⬜ 在 `router.py` 新增 `dispatch_internal(sender, to, cc, content, metadata, images=None) -> None` 方法：fire-and-forget 版 dispatch（内部 spawn task）
-23. ⬜ 在 `team_tools.py::send_message` 内调用 `router.dispatch_internal`（注入 router 引用：通过新加的 `_router_ref` 全局或 setter）
-24. ⬜ 在 `team_tools.py::submit_deliverable` 完成后，循环调用 `router.notify_assignee(downstream_task)`
-25. ⬜ 在 `team_tools.py::give_up` 内调用 `router.dispatch_internal` 通知 orchestrator
-26. ⬜ Router 增加防洪水实现细节：维护 `_recent_msgs: dict[(sender,to_tuple), list[ts]]`，5 分钟窗口 N=6 上限
-27. ⬜ Commit Phase 3：`feat(router): 工具结果路由到任务事件链 + 自动唤醒下游 + 防洪水`
+21. ✅ 在 `core/router.py` 新增 `notify_assignee(task: dict) -> None` 方法：构造 `【新任务】task-XXXX ...` envelope → `dispatch_internal` 给 assignee
+22. ✅ 在 `router.py` 新增 `dispatch_internal(sender, to, cc, content, metadata, images=None) -> None` 方法：fire-and-forget 版 dispatch（内部 spawn task）
+23. ✅ 在 `team_tools.py::send_message` 内调用 `router.dispatch_internal`（注入 router 引用：通过新加的 `_router_ref` 全局或 setter）
+24. ✅ 在 `team_tools.py::submit_deliverable` 完成后，循环调用 `router.notify_assignee(downstream_task)`
+25. ✅ 在 `team_tools.py::give_up` 内调用 `router.dispatch_internal` 通知 orchestrator
+26. ✅ Router 增加防洪水实现细节：维护 `_recent_msgs: dict[(sender,to_tuple), list[ts]]`，5 分钟窗口 N=6 上限
+27. ✅ Commit Phase 3：`feat(router): 工具结果路由到任务事件链 + 自动唤醒下游 + 防洪水`
 
 ### Phase 4：API 层（commit: `feat(api): ...`）
 

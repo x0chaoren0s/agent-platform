@@ -203,6 +203,10 @@ async def submit_deliverable(
     if updated is None:
         return f"错误：交付失败：{task_id}"
     downstream = await store.find_ready_downstream(task_id)
+    router = _ROUTERS.get(updated.thread_id)
+    if router is not None and hasattr(router, "notify_assignee"):
+        for task_item in downstream:
+            await router.notify_assignee(task_item.__dict__)
     await _emit(updated.thread_id, {"type": "task_event", "event": "delivered", "task": updated.__dict__})
     for task_item in downstream:
         await _emit(task_item.thread_id, {"type": "task_event", "event": "ready", "task": task_item.__dict__})
