@@ -44,6 +44,7 @@ from core.conversation_store import ConversationStore
 from core.checkpoint_store import CheckpointStore
 from core import knowledge_base as kb_mod
 from core import summarizer as summarizer_mod
+from core import team_tools
 from core.platform_tools import (
     list_team,
     recruit_fixed,
@@ -51,6 +52,8 @@ from core.platform_tools import (
     recruit_temp,
     update_project_context,
 )
+from core.question_store import QuestionStore
+from core.task_store import TaskStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("agent-platform")
@@ -68,6 +71,8 @@ _conv_store: ConversationStore | None = None
 _checkpoint_store: CheckpointStore | None = None
 _routers: dict[str, MessageRouter] = {}
 _active_websockets: dict[str, WebSocket] = {}  # thread_id → active websocket
+_task_stores: dict[str, TaskStore] = {}
+_question_stores: dict[str, QuestionStore] = {}
 
 
 def _project_dir(name: str) -> Path:
@@ -76,18 +81,21 @@ def _project_dir(name: str) -> Path:
 
 def _activate(name: str) -> None:
     """Switch to a different project (hot-reload registry)."""
-    global _current_project, _registry, _session_store, _conv_store, _checkpoint_store, _routers
+    global _current_project, _registry, _session_store, _conv_store, _checkpoint_store, _routers, _task_stores, _question_stores
     pdir = _project_dir(name)
     if not pdir.exists():
         raise FileNotFoundError(f"Project directory not found: {pdir}")
     if _registry is not None:
         _registry.stop_watching()
     _routers.clear()
+    _task_stores.clear()
+    _question_stores.clear()
     _registry = AgentRegistry(pdir)
     _session_store = SessionStore(pdir / "sessions")
     _conv_store = ConversationStore(pdir / "memory" / "platform.db")
     _checkpoint_store = CheckpointStore(pdir / "memory" / "platform.db", pdir)
     _registry.start_watching()
+    team_tools.set_broadcaster(_ws_broadcast)
     _current_project = name
     logger.info("Activated project '%s'  agents=%s", name, list(_registry.all().keys()))
 
@@ -102,7 +110,32 @@ def _get_router(thread_id: str) -> MessageRouter:
             thread_id=thread_id,
             log_path=log_path,
         )
+        team_tools.set_router(thread_id, _routers[thread_id])
     return _routers[thread_id]
+
+
+async def _get_task_store(thread_id: str) -> TaskStore:
+    _ = thread_id
+    pdir = _project_dir(_current_project)
+    key = str(pdir.resolve())
+    store = _task_stores.get(key)
+    if store is None:
+        store = TaskStore(db_path=pdir / "memory" / "tasks.db", project=_current_project)
+        await store.init_db()
+        _task_stores[key] = store
+    return store
+
+
+async def _get_question_store(thread_id: str) -> QuestionStore:
+    _ = thread_id
+    pdir = _project_dir(_current_project)
+    key = str(pdir.resolve())
+    store = _question_stores.get(key)
+    if store is None:
+        store = QuestionStore(db_path=pdir / "memory" / "tasks.db", project=_current_project)
+        await store.init_db()
+        _question_stores[key] = store
+    return store
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +341,17 @@ async def _broadcast_to_project(event: dict[str, Any]) -> None:
             dead.append(tid)
     for tid in dead:
         _active_websockets.pop(tid, None)
+
+
+async def _ws_broadcast(thread_id: str, event: dict[str, Any]) -> None:
+    """Broadcast event to a specific thread websocket if connected."""
+    ws = _active_websockets.get(thread_id)
+    if ws is None:
+        return
+    try:
+        await ws.send_text(json.dumps(event, ensure_ascii=False))
+    except Exception:
+        _active_websockets.pop(thread_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -605,6 +649,8 @@ _TOOL_CALL_RE = re.compile(r"```tool_call\s*\n(.*?)\n```", re.DOTALL)
 async def _process_tool_calls(
     text: str,
     project_dir: Path,
+    thread_id: str,
+    caller_agent: str,
 ) -> list[dict[str, Any]]:
     """
     Parse ```tool_call ... ``` blocks from orchestrator output and execute them.
@@ -620,7 +666,13 @@ async def _process_tool_calls(
             logger.warning("Failed to parse tool_call block: %s", m.group(0))
             continue
 
-        result = await _execute_tool(tool_name, args, project_dir)
+        result = await _execute_tool(
+            tool_name,
+            args,
+            project_dir,
+            thread_id=thread_id,
+            caller_agent=caller_agent,
+        )
         results.append({"tool": tool_name, "result": result})
         logger.info("Tool call executed: %s → %s", tool_name, result[:80])
 
@@ -637,6 +689,9 @@ async def _execute_tool(
     tool_name: str,
     args: dict[str, Any],
     project_dir: Path,
+    *,
+    thread_id: str,
+    caller_agent: str,
 ) -> str:
     pdir_str = str(project_dir)
     if tool_name == "list_team":
@@ -659,6 +714,14 @@ async def _execute_tool(
         return await kb_mod.kb_write(project_dir=project_dir, **args)
     elif tool_name == "kb_search":
         return await kb_mod.kb_search(project_dir=project_dir, **args)
+    elif tool_name in team_tools.TEAM_TOOL_DISPATCH:
+        fn = team_tools.TEAM_TOOL_DISPATCH[tool_name]
+        return await fn(
+            project_dir=pdir_str,
+            thread_id=thread_id,
+            caller_agent=caller_agent,
+            **args,
+        )
     else:
         return f"未知工具：{tool_name}"
 
@@ -670,6 +733,78 @@ async def _execute_tool(
 @app.get("/api/log")
 def get_log(thread_id: str = "default"):
     return {"messages": _get_router(thread_id).get_global_log()}
+
+
+class AnswerQuestionRequest(BaseModel):
+    answer: str
+
+
+@app.get("/api/threads/{thread_id}/tasks")
+async def api_list_tasks(
+    thread_id: str,
+    status: str | None = None,
+    assignee: str | None = None,
+    scope: str | None = None,
+):
+    store = await _get_task_store(thread_id)
+    tasks = await store.list(thread_id=thread_id, status=status, assignee=assignee)
+    if scope == "blocked":
+        tasks = [t for t in tasks if t.status == "blocked_on_user"]
+    elif scope == "downstream":
+        tasks = [t for t in tasks if bool(t.depends_on)]
+    return {"ok": True, "data": [t.__dict__ for t in tasks]}
+
+
+@app.get("/api/threads/{thread_id}/tasks/{task_id}")
+async def api_get_task(thread_id: str, task_id: str):
+    _ = thread_id
+    store = await _get_task_store(thread_id)
+    task = await store.get(task_id)
+    if not task:
+        return {"ok": False, "error": f"task not found: {task_id}"}
+    history = await store.history(task_id)
+    data = task.__dict__.copy()
+    data["history"] = [h.__dict__ for h in history]
+    return {"ok": True, "data": data}
+
+
+@app.get("/api/threads/{thread_id}/questions")
+async def api_list_questions(thread_id: str, status: str = "pending"):
+    qstore = await _get_question_store(thread_id)
+    if status == "pending":
+        rows = await qstore.list_pending(thread_id)
+    else:
+        rows = []
+    return {"ok": True, "data": [q.__dict__ for q in rows]}
+
+
+@app.post("/api/threads/{thread_id}/questions/{q_id}/answer")
+async def api_answer_question(thread_id: str, q_id: str, body: AnswerQuestionRequest):
+    qstore = await _get_question_store(thread_id)
+    q = await qstore.answer(q_id, answer=body.answer)
+    if q is None:
+        return {"ok": False, "error": f"question not found or already answered: {q_id}"}
+    await _ws_broadcast(thread_id, {"type": "user_answer_received", "question_id": q_id, "answer": body.answer})
+    router = _get_router(thread_id)
+    await router.dispatch_internal(
+        sender="user",
+        to=[q.asker],
+        cc=[],
+        content=f"【用户回答】问题 {q_id}: {body.answer}",
+        metadata={"type": "user_answer", "question_id": q_id, "related_task": q.related_task},
+    )
+    return {"ok": True, "data": q.__dict__}
+
+
+@app.get("/api/threads/{thread_id}/workspace/{path:path}")
+async def api_get_workspace_file(thread_id: str, path: str):
+    _ = thread_id
+    pdir = _project_dir(_current_project)
+    workspace_root = (pdir / "workspace").resolve()
+    file_path = (workspace_root / path).resolve()
+    if not file_path.is_relative_to(workspace_root) or not file_path.exists():
+        return {"ok": False, "error": "file not found"}
+    return FileResponse(file_path)
 
 
 # ---------------------------------------------------------------------------
@@ -694,7 +829,12 @@ async def post_chat(req: ChatRequest):
         events.append(event)
         if event.get("type") == "agent_done":
             content = event.get("envelope", {}).get("content", "")
-            tr = await _process_tool_calls(content, pdir)
+            tr = await _process_tool_calls(
+                content,
+                pdir,
+                thread_id=req.thread_id,
+                caller_agent=event.get("agent", ""),
+            )
             tool_results.extend(tr)
             if tr:
                 router.record_tool_feedback(event.get("agent", ""), tr)
@@ -742,6 +882,31 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
                 await websocket.send_text(json.dumps({"type": "error", "message": "Invalid JSON"}))
                 continue
 
+            action = msg.get("action")
+            if action == "answer_question":
+                q_id = str(msg.get("question_id", "")).strip()
+                answer = str(msg.get("answer", "")).strip()
+                if not q_id or not answer:
+                    await websocket.send_text(json.dumps({"type": "error", "message": "question_id/answer 不能为空"}))
+                    continue
+                qstore = await _get_question_store(thread_id)
+                q = await qstore.answer(q_id, answer=answer)
+                if q is None:
+                    await websocket.send_text(json.dumps({"type": "error", "message": f"问题不存在或已处理：{q_id}"}))
+                    continue
+                await _ws_broadcast(
+                    thread_id,
+                    {"type": "user_answer_received", "question_id": q_id, "answer": answer},
+                )
+                await router.dispatch_internal(
+                    sender="user",
+                    to=[q.asker],
+                    cc=[],
+                    content=f"【用户回答】问题 {q_id}: {answer}",
+                    metadata={"type": "user_answer", "question_id": q_id, "related_task": q.related_task},
+                )
+                continue
+
             sender  = msg.get("sender", "user")
             to      = msg.get("to", [])
             cc      = msg.get("cc", [])
@@ -776,7 +941,12 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
                     agent_name = event.get("agent", "")
                     reply_chunks = full_reply_by_agent.pop(agent_name, [])
                     reply_text = "".join(reply_chunks)
-                    tool_results = await _process_tool_calls(reply_text, pdir)
+                    tool_results = await _process_tool_calls(
+                        reply_text,
+                        pdir,
+                        thread_id=thread_id,
+                        caller_agent=agent_name,
+                    )
                     if tool_results:
                         router.record_tool_feedback(agent_name, tool_results)
                     for tr in tool_results:

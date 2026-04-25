@@ -822,16 +822,16 @@ async function fetchPendingQuestions()      // GET /api/.../questions?status=pen
 
 ### Phase 4：API 层（commit: `feat(api): ...`）
 
-28. ⬜ 在 `main.py` 新增 `_get_task_store(thread_id)` / `_get_question_store(thread_id)` helper（按当前 _current_project 取）
-29. ⬜ 在 `main.py` 扩展 `_process_tool_calls` 签名：增加 `thread_id` 与 `caller_agent` 参数
-30. ⬜ 在 `main.py` 同步修改两处调用点（697 行 POST /api/chat、779 行 WS）传入 thread_id 与 agent_name
-31. ⬜ 在 `main.py::_execute_tool` 添加 7 个新工具的 elif 分支（调用 `TEAM_TOOL_DISPATCH[tool_name]`，注入 thread_id/caller_agent）
-32. ⬜ 注入 router 引用到 team_tools：在 `_get_router(thread_id)` 创建 router 后调用 `team_tools.set_router(thread_id, router)`
-33. ⬜ 在 `main.py` 新增 `_ws_broadcast(thread_id, event)` helper
-34. ⬜ 在 team_tools 各副作用点调用 `_ws_broadcast`（通过 setter 注入 broadcaster fn）
-35. ⬜ 在 `main.py` 新增 4 个 REST 端点（§6 列表）
-36. ⬜ 在 `main.py` WebSocket 主循环扩展：识别 `action` 字段，分流到 `answer_question` 处理（写入 question_store + dispatch_internal 给 asker + 广播 user_answer_received）
-37. ⬜ Commit Phase 4：`feat(api): 新增任务/提问 REST 端点 + WS 事件广播`
+28. ✅ 在 `main.py` 新增 `_get_task_store(thread_id)` / `_get_question_store(thread_id)` helper（按当前 _current_project 取）
+29. ✅ 在 `main.py` 扩展 `_process_tool_calls` 签名：增加 `thread_id` 与 `caller_agent` 参数
+30. ✅ 在 `main.py` 同步修改两处调用点（697 行 POST /api/chat、779 行 WS）传入 thread_id 与 agent_name
+31. ✅ 在 `main.py::_execute_tool` 添加 7 个新工具的 elif 分支（调用 `TEAM_TOOL_DISPATCH[tool_name]`，注入 thread_id/caller_agent）
+32. ✅ 注入 router 引用到 team_tools：在 `_get_router(thread_id)` 创建 router 后调用 `team_tools.set_router(thread_id, router)`
+33. ✅ 在 `main.py` 新增 `_ws_broadcast(thread_id, event)` helper
+34. ✅ 在 team_tools 各副作用点调用 `_ws_broadcast`（通过 setter 注入 broadcaster fn）
+35. ✅ 在 `main.py` 新增 4 个 REST 端点（§6 列表）
+36. ✅ 在 `main.py` WebSocket 主循环扩展：识别 `action` 字段，分流到 `answer_question` 处理（写入 question_store + dispatch_internal 给 asker + 广播 user_answer_received）
+37. ✅ Commit Phase 4：`feat(api): 新增任务/提问 REST 端点 + WS 事件广播`
 
 ### Phase 5：前端 UI（commit: `feat(web): ...`）
 
