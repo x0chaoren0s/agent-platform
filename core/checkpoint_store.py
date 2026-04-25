@@ -114,11 +114,11 @@ class CheckpointStore:
         now = datetime.now().isoformat(timespec="seconds")
         chat_log_obj = self._read_chat_log(thread_id)
         if anchor_message_id:
-            # Keep messages up to and including the anchor message.
-            # If anchor is not found, fall back to full snapshot.
+            # 锚点 = 「该条消息之前」的对话（不包含该条本身），默认规避「我发了话下面空白」
+            # 的观感）。未找到则保留完整快照。
             for i, msg in enumerate(chat_log_obj):
                 if msg.get("id") == anchor_message_id:
-                    chat_log_obj = chat_log_obj[: i + 1]
+                    chat_log_obj = chat_log_obj[:i]
                     break
         chat_log = json.dumps(chat_log_obj, ensure_ascii=False)
         sessions = json.dumps(self._read_sessions(thread_id), ensure_ascii=False)

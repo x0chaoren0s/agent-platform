@@ -233,6 +233,9 @@
   .tc-fold-body { display: none; padding: 8px 10px; background: #090e18; }
   .tool-calls-fold.open .tc-fold-body { display: block; }
   .tc-pre { font-size: 10px; color: #94a3b8; white-space: pre-wrap; word-break: break-all; margin: 0; line-height: 1.6; font-family: 'Consolas', monospace; }
+  .stream-tc-wrap { margin-bottom: 5px; }
+  .tc-pre.tc-partial { border-left: 2px solid #4ade80; padding-left: 6px; }
+  .stream-cursor { animation: blink .7s infinite; }
 
   /* ── Streaming activity panel ── */
   .stream-meta-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -694,7 +697,7 @@ async function createCheckpoint(thread_id, evt, anchorMessageId = null) {
     body: JSON.stringify(payload)
   });
   if (!res.ok) { showToast('❌ 创建失败'); return; }
-  showToast(anchorMessageId ? '📌 锚点检查点已创建' : '📌 检查点已创建');
+  showToast(anchorMessageId ? '📌 已记录「该消息之前」状态' : '📌 检查点已创建');
   await fetchCheckpoints(thread_id);
 }
 
@@ -722,7 +725,7 @@ async function restoreCheckpoint(id, note, thread_id, evt) {
     modal.innerHTML = `
       <div class="restore-modal-box">
         <div class="restore-modal-title">回滚到检查点：${escHtml(note)}</div>
-        <div class="restore-modal-hint">此操作将恢复该对话的聊天记录到检查点状态。\n团队共享的 context.md 默认不会恢复（可勾选下方选项强制恢复）。</div>
+        <div class="restore-modal-hint">将对话恢复为检查点保存时的内容（若从用户气泡创建，则对应「该条消息**之前**」的那屏）。\n团队共享的 context.md 默认不会恢复（可勾选下方选项强制恢复）。</div>
         <div class="restore-modal-ctx" id="restore-ctx-hint" style="display:none"></div>
         <div class="restore-modal-opts">
           <input type="checkbox" id="restore-ctx-chk">
@@ -1049,6 +1052,51 @@ function extractToolCalls(text) {
   return { cleaned, blocks };
 }
 
+/** 流式用：已完成的 tool_call 块 + 正写到一半的块（到下一个 ``` 为止不交给正文气泡） */
+function splitStreamingToolCalls(text) {
+  const { cleaned: c0, blocks } = extractToolCalls(text);
+  const marker = '```tool_call';
+  const p = c0.indexOf(marker);
+  if (p === -1) {
+    return { cleaned: c0, toolBlocks: blocks, partial: null };
+  }
+  const before = c0.slice(0, p);
+  let after = c0.slice(p + marker.length);
+  if (after.startsWith('\r\n')) after = after.slice(2);
+  else if (after.startsWith('\n')) after = after.slice(1);
+  return { cleaned: before, toolBlocks: blocks, partial: after };
+}
+
+function updateStreamToolCallFold(name, toolBlocks, partial) {
+  const w = document.getElementById('stream-tc-' + name);
+  if (!w) return;
+  const hasPartial = partial != null;
+  if (!toolBlocks.length && !hasPartial) {
+    w.style.display = 'none';
+    w.innerHTML = '';
+    w.setAttribute('aria-hidden', 'true');
+    return;
+  }
+  w.style.display = 'block';
+  w.setAttribute('aria-hidden', 'false');
+  let label;
+  if (toolBlocks.length && hasPartial) {
+    label = `🔧 ${toolBlocks.length} 个工具调用 · 下一条生成中`;
+  } else if (hasPartial) {
+    label = '🔧 工具调用 (生成中)';
+  } else {
+    label = `🔧 ${toolBlocks.length} 个工具调用`;
+  }
+  const pres = toolBlocks.map(b => `<pre class="tc-pre">${escHtml(b)}</pre>`).join('');
+  const partPre = hasPartial
+    ? `<pre class="tc-pre tc-partial">${escHtml(partial)}<span class="stream-cursor">▋</span></pre>`
+    : '';
+  w.innerHTML = `<div class="tool-calls-fold open" onclick="this.classList.toggle('open')">
+    <span class="tc-fold-label">${label} <span class="tc-fold-chev">▼</span></span>
+    <div class="tc-fold-body">${pres}${partPre}</div>
+  </div>`;
+}
+
 function appendMessage(env) {
   const isUser = env.sender === 'user';
   const isTemp = env.metadata && env.metadata.is_temp;
@@ -1077,9 +1125,10 @@ function appendMessage(env) {
       </div>`
     : '';
 
-  const pinBtn = isUser
-    ? `<button class="msg-pin-btn" title="以此消息为锚点创建检查点" onclick="createCheckpoint('${THREAD_ID}',event,'${env.id}')">📌</button>`
-    : '';
+  const pinTitle = isUser
+    ? '检查点=此条用户消息出现之前的对话'
+    : '检查点=此条成员消息出现之前的对话';
+  const pinBtn = `<button class="msg-pin-btn" title="${escHtml(pinTitle)}" onclick="createCheckpoint('${THREAD_ID}',event,'${env.id}')">📌</button>`;
 
   wrap.style.position = 'relative';
   wrap.innerHTML = `
@@ -1242,6 +1291,7 @@ function startStreamBubble(name) {
       <span class="stream-stat">⏱ <span class="val" id="stimer-${name}">0.0</span>s</span>
       <span class="stream-stat"><span class="val" id="schars-${name}">0</span> 字</span>
     </div>
+    <div class="stream-tc-wrap" id="stream-tc-${name}" style="display:none" aria-hidden="true"></div>
     <div class="bubble streaming" id="stream-${name}"></div>`;
   el('msgList').appendChild(wrap);
   scrollBottom();
@@ -1266,6 +1316,7 @@ function appendDelta(name, delta) {
   s.text += delta;
 
   const { mainText, thinkText, isThinking } = parseStreamText(s.text);
+  const { cleaned, toolBlocks, partial } = splitStreamingToolCalls(mainText);
 
   // Route <think> content into the process bubble
   if (thinkText || isThinking) {
@@ -1284,9 +1335,10 @@ function appendDelta(name, delta) {
     }
   }
 
-  s.mainEl.textContent = mainText;
+  s.mainEl.textContent = cleaned;
+  updateStreamToolCallFold(name, toolBlocks, partial);
   const charsEl = document.getElementById('schars-' + name);
-  if (charsEl) charsEl.textContent = mainText.length;
+  if (charsEl) charsEl.textContent = String(cleaned.length);
   scrollBottom();
 }
 
