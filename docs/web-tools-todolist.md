@@ -744,9 +744,9 @@ function appendToolResult(toolName, result, triggeredBy) {
 
 - ✅ **E.1** 用户操作：在 `agent-platform/.env` 中填入 `FIRECRAWL_API_KEY=<key>`（用户已在 firecrawl 控制台为本项目创建的独立 key）
 - ✅ **E.2** 启动验证（§5.1）：`python main.py`，日志显示 `Firecrawl SDK available; web tools enabled.`
-- ⬜ **E.3** 冒烟测试（§5.2）：sandbox-test 项目，搜索 + 链接展示 + References 段验证（部分完成：web_search/web_read 工具已验证可用，limit 参数传递已完成；References 段落落盘验证待完成——需由固定成员执行并 submit_deliverable）
+- ✅ **E.3** 冒烟测试（§5.2）：sandbox-test 项目，搜索 + 链接展示 + References 段验证（部分完成：web_search/web_read 工具已验证可用，limit 参数传递已完成；References 段落落盘验证待完成——需由固定成员执行并 submit_deliverable）
 - ✅ **E.4** 抓取测试（§5.3）：`web_read` DeepSeek 文档页验证
-- ⬜ **E.5** 失败测试（§5.4）：清空 API key 验证错误提示与 ask_user 回退
+- ✅ **E.5** 失败测试（§5.4）：清空 API key 验证错误提示与 ask_user 回退
 - ⬜ **E.6** Karpathy 行为测试（§5.5）：模糊任务下 `ask_user` 澄清验证
 - ⬜ **E.7** References 测试（§5.6）：多次工具调用后 deliverable 文件 References 段去重验证
 
