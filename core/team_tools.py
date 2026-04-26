@@ -236,13 +236,55 @@ async def submit_deliverable(
 
     auto_refs = web_tools.consume_url_history(thread_id, caller_agent)
     explicit_refs = [str(r).strip() for r in (references or []) if str(r).strip()]
+
+    def _extract_ref_url(raw: str) -> str:
+        text = (raw or "").strip()
+        if not text:
+            return ""
+        # Markdown link: [title](url)
+        lpos = text.rfind("](")
+        if lpos != -1 and text.endswith(")"):
+            candidate = text[lpos + 2 : -1].strip()
+            if candidate.startswith(("http://", "https://")):
+                return candidate
+        if text.startswith(("http://", "https://")):
+            return text
+        return ""
+
+    def _norm_url(url: str) -> str:
+        return (url or "").strip().rstrip("/").lower()
+
     ref_lines: list[str] = []
+    seen_urls: set[str] = set()
+    seen_raw_lines: set[str] = set()
+
     for item in auto_refs:
-        url = item.get("url", "")
-        title = item.get("title", "")
-        if url:
-            ref_lines.append(f"- [{title or url}]({url})")
+        url = str(item.get("url", "")).strip()
+        title = str(item.get("title", "")).strip()
+        if not url:
+            continue
+        norm = _norm_url(url)
+        if norm and norm in seen_urls:
+            continue
+        if norm:
+            seen_urls.add(norm)
+        ref_lines.append(f"- [{title or url}]({url})")
+
     for r in explicit_refs:
+        url = _extract_ref_url(r)
+        if url:
+            norm = _norm_url(url)
+            if norm and norm in seen_urls:
+                continue
+            if norm:
+                seen_urls.add(norm)
+            ref_lines.append(f"- {r}")
+            continue
+        # Non-URL text reference: dedupe exact normalized line only.
+        raw_norm = r.strip().lower()
+        if raw_norm in seen_raw_lines:
+            continue
+        seen_raw_lines.add(raw_norm)
         ref_lines.append(f"- {r}")
     refs_section = ""
     if ref_lines:

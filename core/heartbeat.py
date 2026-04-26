@@ -92,14 +92,23 @@ class HeartbeatScheduler:
                 logger.exception("Heartbeat scan failed: thread=%s", thread_id)
 
     async def _scan_thread(self, thread_id: str) -> None:
+        async def _emit_heartbeat(count: int) -> None:
+            if self._broadcaster is not None:
+                await self._broadcaster(
+                    thread_id,
+                    {"type": "heartbeat", "thread_id": thread_id, "silent_count": int(count)},
+                )
+
         is_paused = await self._conversation_store.is_paused(thread_id)
         if is_paused:
             self._last_silent_count[thread_id] = 0
+            await _emit_heartbeat(0)
             return
         project_dir = self._project_dir_provider(thread_id)
         router = self._router_provider(thread_id)
         if not project_dir or router is None:
             self._last_silent_count[thread_id] = 0
+            await _emit_heartbeat(0)
             return
         store = await self._task_store_provider(project_dir)
         now_iso = datetime.now().isoformat(timespec="seconds")
@@ -111,6 +120,7 @@ class HeartbeatScheduler:
         )
         if not silent_tasks:
             self._last_silent_count[thread_id] = 0
+            await _emit_heartbeat(0)
             logger.debug("Heartbeat tick: no silent tasks, thread=%s", thread_id)
             return
 
@@ -170,6 +180,7 @@ class HeartbeatScheduler:
         self._last_silent_count[thread_id] = total_advisory_count
 
         if not orphaned_to_notify and not final_silent:
+            await _emit_heartbeat(total_advisory_count)
             logger.debug("Heartbeat tick: all tasks filtered, thread=%s", thread_id)
             return
 
@@ -210,11 +221,7 @@ class HeartbeatScheduler:
                 )
             await _send_advisory("\n".join(lines), mark_silent=final_silent, mark_orphan=[])
 
-        if self._broadcaster is not None:
-            await self._broadcaster(
-                thread_id,
-                {"type": "heartbeat", "thread_id": thread_id, "silent_count": total_advisory_count},
-            )
+        await _emit_heartbeat(total_advisory_count)
         logger.info(
             "Heartbeat: thread=%s orphaned=%d silent=%d",
             thread_id, len(orphaned_to_notify), len(final_silent),
