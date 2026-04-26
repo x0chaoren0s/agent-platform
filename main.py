@@ -24,8 +24,10 @@ import json
 import logging
 import os
 import re
+import stat
 import sys
 import textwrap
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -34,6 +36,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+import json_repair
 from pydantic import BaseModel
 
 load_dotenv(Path(__file__).parent / ".env")
@@ -123,6 +126,7 @@ def _get_router(thread_id: str) -> MessageRouter:
             thread_id=thread_id,
             log_path=log_path,
             broadcaster=_ws_broadcast,
+            tool_executor=_agent_tool_executor,
         )
         team_tools.set_router(thread_id, _routers[thread_id], project_dir=str(pdir))
     return _routers[thread_id]
@@ -130,6 +134,37 @@ def _get_router(thread_id: str) -> MessageRouter:
 
 def _normalize_agent_filename(name: str) -> str:
     return str(name or "").strip().replace(" ", "_").replace("-", "_")
+
+
+def _force_remove_tree(path: Path, retries: int = 3, delay_seconds: float = 0.2) -> None:
+    """
+    Remove a directory tree robustly on Windows.
+    - Clears readonly bit on failure.
+    - Retries a few times for transient file locks.
+    Raises the last exception if still not removable.
+    """
+    import shutil
+
+    def _on_rm_exc(func, p, exc_info):  # type: ignore[no-untyped-def]
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        except Exception:
+            pass
+
+    last_err: Exception | None = None
+    for i in range(retries):
+        try:
+            shutil.rmtree(path, onexc=_on_rm_exc)
+            if not path.exists():
+                return
+            last_err = OSError(f"Project directory still exists after remove: {path}")
+        except Exception as exc:
+            last_err = exc
+        if i < retries - 1:
+            time.sleep(delay_seconds)
+    if last_err is not None:
+        raise last_err
 
 
 def _sync_registry_after_member_change(*, project_dir: Path, action: str, name: str) -> None:
@@ -273,6 +308,7 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
 
       【团队管理工具】（以 JSON 格式调用，系统会自动执行）
       当你需要执行团队操作时，在回复末尾输出如下 JSON 代码块（系统解析执行）：
+      - recruit_fixed 时，args.instructions 必须是单段短文本（建议 <= 300 字），不要写超长多段说明，避免 tool_call JSON 过长导致解析失败。
 
       ```tool_call
       {"tool": "recruit_fixed", "args": {"name": "agent_name", "description": "...", "capabilities": ["cap1"], "instructions": "完整的系统提示词"}}
@@ -294,13 +330,14 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
       {"tool": "list_team", "args": {}}
       ```
 
-      【招募固定成员申请格式】（发给用户审批）
-      当你认为需要新增固定成员时，先向用户提交申请，格式：
-      > 【招募申请】建议招募 **{成员名}**
-      > 角色：{描述}
-      > 能力：{能力列表}
-      > 理由：{说明}
-      > 回复"同意"或"拒绝"
+      【招募固定成员流程】（两步走，缺一不可）
+      第一步：向用户说明招募理由后，立即调用 ask_user 工具（必须包含 confirm marker）：
+      ```tool_call
+      {"tool": "ask_user", "args": {"question": "建议招募固定成员「研究员」，专职网络搜索 [[confirm:recruit:研究员]]", "options": [{"id": "yes", "label": "同意"}, {"id": "no", "label": "拒绝"}], "urgency": "high"}}
+      ```
+      第二步：用户点击"同意"后，再调用 recruit_fixed。
+      - 严禁用纯文本写"回复'同意'或'拒绝'"代替 ask_user 工具调用。
+      - 严禁在自己的回复中编写【工具结果】内容——工具结果由系统自动注入，你只需等待。
 
       【任务派发协议】（必读）
       - 当用户请求复杂任务时，必须使用 assign_task 派发，不要只口头通知。
@@ -308,6 +345,8 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
       - depends_on 只能填写已存在的 task-id（形如 task-0001），不能填写成员名。
       - 成员能力不足时，先 recruit_fixed 再 assign_task。
       - 收到 give_up/失败通知后，评估重派、拆解或请用户决策。
+      - 若用户请求“前N条/再来N条/额外N条”这类数量型搜索任务，在 brief 里必须明确写入“web_search 需传 limit=N”。
+      - 【固定成员优先原则】需要 web_search / web_read 的搜索或调研任务，应优先 assign_task 给具备该能力的固定成员（如数据分析师），由其执行并 submit_deliverable 落盘；只有当团队中无任何成员具备所需能力时，才 recruit_temp 作为兜底。
 
       【内部通信协议】
       - 可使用 send_message 协调成员；普通成员发消息也会自动 CC orchestrator。
@@ -341,6 +380,7 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
         - dismiss_member: [[confirm:dismiss:成员名]]
         - recruit_fixed: [[confirm:recruit:成员名]]
         - update_project_context: [[confirm:context:rewrite]]
+      - 若工具结果返回“缺少 confirm / 必须先 ask_user”之类错误，下一步必须先发 ask_user，不得重复直接调用红色工具。
 
       ```tool_call
       {"tool": "ask_user", "args": {"question": "请确认是否解雇成员A [[confirm:dismiss:成员A]]", "options": [{"id": "yes", "label": "确认"}, {"id": "no", "label": "取消"}], "urgency": "high"}}
@@ -407,7 +447,10 @@ def create_project(req: CreateProjectRequest):
         raise HTTPException(status_code=400, detail="项目名只能包含字母、数字、下划线和连字符，长度 1-40")
     pdir = _project_dir(name)
     if pdir.exists():
-        raise HTTPException(status_code=409, detail=f"项目 '{name}' 已存在")
+        # Treat a folder as an existing project only when it has an agents dir.
+        # This allows recovering from partial-delete leftovers (e.g. only context.md remains).
+        if (pdir / "agents").exists():
+            raise HTTPException(status_code=409, detail=f"项目 '{name}' 已存在")
     _scaffold_project(name)
     _activate(name)
     return {"ok": True, "name": name, "agents": _registry.list_info()}
@@ -425,7 +468,6 @@ def activate_project(name: str):
 @app.delete("/api/projects/{name}")
 def delete_project(name: str):
     """Delete a project directory and all its contents."""
-    import shutil
     global _current_project, _registry, _session_store, _routers
 
     pdir = _project_dir(name)
@@ -442,7 +484,9 @@ def delete_project(name: str):
         _routers.clear()
         _current_project = ""
 
-    shutil.rmtree(pdir, ignore_errors=True)
+    _force_remove_tree(pdir)
+    if pdir.exists():
+        raise HTTPException(status_code=500, detail=f"项目 '{name}' 删除失败：目录仍存在")
     logger.info("Deleted project '%s'", name)
 
     # Find remaining projects
@@ -552,8 +596,11 @@ def create_agent(req: CreateAgentRequest):
     )
     if result.startswith("错误"):
         raise HTTPException(status_code=400, detail=result)
-    # Registry will auto-reload via watchdog; return updated list after brief delay
-    import time; time.sleep(0.3)
+    _sync_registry_after_member_change(
+        project_dir=pdir,
+        action="recruit",
+        name=req.name,
+    )
     return {"ok": True, "message": result, "agents": _registry.list_info()}
 
 
@@ -564,7 +611,11 @@ def delete_agent(name: str):
     result = dismiss_member(project_dir=str(pdir), name=name)
     if result.startswith("错误"):
         raise HTTPException(status_code=400, detail=result)
-    import time; time.sleep(0.3)
+    _sync_registry_after_member_change(
+        project_dir=pdir,
+        action="dismiss",
+        name=name,
+    )
     return {"ok": True, "message": result, "agents": _registry.list_info()}
 
 
@@ -812,6 +863,16 @@ async def restore_checkpoint(checkpoint_id: str, body: dict | None = None):
 _TOOL_CALL_RE = re.compile(r"```tool_call\s*\n(.*?)\n```", re.DOTALL)
 
 
+async def _agent_tool_executor(thread_id: str, agent_name: str, reply_text: str) -> list[dict[str, Any]]:
+    pdir = _project_dir(_current_project)
+    return await _process_tool_calls(
+        reply_text,
+        pdir,
+        thread_id=thread_id,
+        caller_agent=agent_name,
+    )
+
+
 async def _process_tool_calls(
     text: str,
     project_dir: Path,
@@ -825,12 +886,32 @@ async def _process_tool_calls(
     results = []
     for m in _TOOL_CALL_RE.finditer(text):
         try:
-            payload = json.loads(m.group(1))
-            tool_name: str = payload.get("tool", "")
-            args: dict = payload.get("args", {})
-        except Exception:
+            payload = json_repair.loads((m.group(1) or "").strip())
+        except Exception as exc:
             logger.warning("Failed to parse tool_call block: %s", m.group(0))
+            snippet = m.group(1).strip().replace("\n", " ")
+            if len(snippet) > 180:
+                snippet = snippet[:180] + "..."
+            results.append(
+                {
+                    "tool": "tool_call_parse_error",
+                    "result": f"工具调用解析失败：{type(exc).__name__}: {exc}。片段：{snippet}",
+                }
+            )
             continue
+        if not isinstance(payload, dict):
+            snippet = m.group(1).strip().replace("\n", " ")
+            if len(snippet) > 180:
+                snippet = snippet[:180] + "..."
+            results.append(
+                {
+                    "tool": "tool_call_parse_error",
+                    "result": f"工具调用解析失败：tool_call 不是 JSON 对象。片段：{snippet}",
+                }
+            )
+            continue
+        tool_name: str = payload.get("tool", "")
+        args: dict = payload.get("args", {})
 
         result = await _execute_tool(
             tool_name,
@@ -864,43 +945,13 @@ async def _process_tool_calls(
                     r.register_temp_agent(temp_name)
                 task_content = str(args.get("task", "")).strip()
                 if task_content:
-                    asyncio.create_task(_run_temp_agent_task(
-                        thread_id=thread_id,
-                        caller_agent=caller_agent,
-                        temp_name=temp_name,
-                        task_content=task_content,
-                        project_dir=project_dir,
-                    ))
+                    await _get_router(thread_id).dispatch_internal(
+                        sender=caller_agent,
+                        to=[temp_name],
+                        cc=[],
+                        content=task_content,
+                    )
     return results
-
-
-async def _run_temp_agent_task(
-    thread_id: str,
-    caller_agent: str,
-    temp_name: str,
-    task_content: str,
-    project_dir: Path,
-) -> None:
-    """Dispatch the task to a freshly registered temp agent and process its tool calls."""
-    router = _get_router(thread_id)
-    async for event in router.dispatch(
-        sender=caller_agent,
-        to=[temp_name],
-        cc=[],
-        content=task_content,
-    ):
-        await _ws_broadcast(thread_id, event)
-        if event.get("type") == "agent_done":
-            content = event.get("envelope", {}).get("content", "")
-            tr = await _process_tool_calls(
-                content,
-                project_dir,
-                thread_id=thread_id,
-                caller_agent=temp_name,
-            )
-            if tr:
-                router.record_tool_feedback(temp_name, tr)
-                await _ws_broadcast(thread_id, {"type": "tool_results", "results": tr})
 
 
 async def _execute_tool(
@@ -1129,9 +1180,7 @@ async def api_answer_question(thread_id: str, q_id: str, body: AnswerQuestionReq
         return {"ok": False, "error": f"question not found or already answered: {q_id}"}
     await _ws_broadcast(thread_id, {"type": "user_answer_received", "question_id": q_id, "answer": body.answer})
     router = _get_router(thread_id)
-    pdir = _project_dir(_current_project)
-    
-    # 像 post_chat 那样处理事件和 tool_calls
+
     async for event in router._dispatch_inner(
         sender="user",
         to=[q.asker],
@@ -1140,17 +1189,12 @@ async def api_answer_question(thread_id: str, q_id: str, body: AnswerQuestionReq
         metadata={"type": "user_answer", "question_id": q_id, "related_task": q.related_task},
     ):
         await _ws_broadcast(thread_id, event)
-        if event.get("type") == "agent_done":
-            content = event.get("envelope", {}).get("content", "")
-            tr = await _process_tool_calls(
-                content,
-                pdir,
-                thread_id=thread_id,
-                caller_agent=event.get("agent", ""),
-            )
-            if tr:
-                router.record_tool_feedback(event.get("agent", ""), tr)
-                await _ws_broadcast(thread_id, {"type": "tool_results", "results": tr})
+        if event.get("type") == "tool_results":
+            results = event.get("results", [])
+            tool_names = {item.get("tool", "") for item in results}
+            if {"recruit_fixed", "dismiss_member"} & tool_names:
+                await asyncio.sleep(0.35)
+                await _ws_broadcast(thread_id, {"type": "agents_updated", "agents": _registry.list_info()})
     return {"ok": True, "data": q.__dict__}
 
 
@@ -1180,22 +1224,12 @@ class ChatRequest(BaseModel):
 @app.post("/api/chat")
 async def post_chat(req: ChatRequest):
     router = _get_router(req.thread_id)
-    pdir = _project_dir(_current_project)
     events: list[dict] = []
     tool_results: list[dict] = []
     async for event in router.dispatch(sender=req.sender, to=req.to, cc=req.cc, content=req.content):
         events.append(event)
-        if event.get("type") == "agent_done":
-            content = event.get("envelope", {}).get("content", "")
-            tr = await _process_tool_calls(
-                content,
-                pdir,
-                thread_id=req.thread_id,
-                caller_agent=event.get("agent", ""),
-            )
-            tool_results.extend(tr)
-            if tr:
-                router.record_tool_feedback(event.get("agent", ""), tr)
+        if event.get("type") == "tool_results":
+            tool_results.extend(event.get("results", []))
     return {"events": events, "tool_results": tool_results}
 
 
@@ -1235,8 +1269,8 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
         while True:
             raw = await websocket.receive_text()
             try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
+                msg = json_repair.loads(raw)
+            except Exception:
                 await websocket.send_text(json.dumps({"type": "error", "message": "Invalid JSON"}))
                 continue
 
@@ -1294,35 +1328,15 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
                     agent_name = event.get("agent", "")
                     full_reply_by_agent.setdefault(agent_name, []).append(event.get("delta", ""))
 
-                # After agent finishes, process any tool_call blocks
                 elif event.get("type") == "agent_done":
                     agent_name = event.get("agent", "")
-                    reply_chunks = full_reply_by_agent.pop(agent_name, [])
-                    reply_text = "".join(reply_chunks)
-                    tool_results = await _process_tool_calls(
-                        reply_text,
-                        pdir,
-                        thread_id=thread_id,
-                        caller_agent=agent_name,
-                    )
-                    if tool_results:
-                        router.record_tool_feedback(agent_name, tool_results)
-                    for tr in tool_results:
-                        # Feed tool result back as a system message in the log
-                        feedback_event = {
-                            "type": "tool_result",
-                            "tool": tr["tool"],
-                            "result": tr["result"],
-                            "triggered_by": agent_name,
-                        }
-                        await websocket.send_text(json.dumps(feedback_event, ensure_ascii=False))
+                    full_reply_by_agent.pop(agent_name, None)
 
-                    if tool_results:
-                        # Send updated agent list so UI refreshes.
-                        # recruit/dismiss relies on watchdog hot-reload, so registry update may lag slightly.
-                        tool_names = {tr.get("tool", "") for tr in tool_results}
-                        if {"recruit_fixed", "dismiss_member"} & tool_names:
-                            await asyncio.sleep(0.35)
+                elif event.get("type") == "tool_results":
+                    results = event.get("results", [])
+                    tool_names = {item.get("tool", "") for item in results}
+                    if {"recruit_fixed", "dismiss_member"} & tool_names:
+                        await asyncio.sleep(0.35)
                         await websocket.send_text(json.dumps({
                             "type": "agents_updated",
                             "agents": _registry.list_info(),

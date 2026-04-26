@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
+import sqlite3
 import textwrap
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,31 @@ def _validate_name(name: str) -> str:
             "名称需以字母/汉字开头，只能包含字母、数字、汉字、下划线，最长 40 字符。"
         )
     return name
+
+
+def _clear_agent_memory(project_dir: Path, agent_name: str) -> None:
+    """
+    Remove persisted memory for one agent so same-name rehire starts clean.
+    """
+    # 1) Remove short-term sessions: sessions/{agent_name}/*.json
+    sess_dir = project_dir / "sessions" / agent_name
+    if sess_dir.exists():
+        shutil.rmtree(sess_dir, ignore_errors=True)
+
+    # 2) Remove long-term history table: memory/long_term.db::history_{agent_name}
+    db_path = project_dir / "memory" / "long_term.db"
+    if not db_path.exists():
+        return
+    table = f'history_{agent_name.replace("-", "_")}'
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(f'DROP TABLE IF EXISTS "{table}"')
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("Failed to clear memory for agent '%s'", agent_name)
 
 
 # ------------------------------------------------------------------
@@ -140,7 +167,8 @@ def dismiss_member(project_dir: str, name: str) -> str:
     except ValueError as e:
         return f"错误：{e}"
 
-    agents_path = _agents_dir(Path(project_dir))
+    project_path = Path(project_dir)
+    agents_path = _agents_dir(project_path)
     yaml_path = agents_path / f"{name}.yaml"
     if not yaml_path.exists():
         return f"错误：找不到成员 '{name}' 的配置文件。"
@@ -155,8 +183,9 @@ def dismiss_member(project_dir: str, name: str) -> str:
         pass
 
     yaml_path.unlink()
+    _clear_agent_memory(project_path, name)
     logger.info("Dismissed agent '%s'", name)
-    return f"已解雇成员 '{name}'，配置文件已删除。"
+    return f"已解雇成员 '{name}'，配置文件及历史记忆已清理。"
 
 
 def recruit_temp(

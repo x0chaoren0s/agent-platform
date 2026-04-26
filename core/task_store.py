@@ -534,8 +534,7 @@ class TaskStore:
     async def _next_task_id(self, thread_id: str) -> str:
         async with aiosqlite.connect(self._db_path) as db:
             async with db.execute(
-                "SELECT id FROM tasks WHERE thread_id = ? ORDER BY id DESC LIMIT 1",
-                (thread_id,),
+                "SELECT id FROM tasks ORDER BY id DESC LIMIT 1",
             ) as cur:
                 row = await cur.fetchone()
         if not row or not row[0]:

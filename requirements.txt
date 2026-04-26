@@ -9,3 +9,4 @@ openai
 agent-framework-core
 agent-framework-openai
 firecrawl-py
+json-repair

@@ -26,7 +26,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from agent_framework._types import Content
 
@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 # System tag added to auto-forwarded messages so the UI can style them
 TAG_AUTO_FORWARD = "auto_forward"
 TAG_TEMP = "temp"
+_OUTGOING_COMM_TOOLS: frozenset[str] = frozenset(
+    {"submit_deliverable", "send_message", "assign_task"}
+)
 
 
 @dataclass
@@ -105,6 +108,7 @@ class MessageRouter:
         log_path: Path | None = None,
         max_inbox_messages: int = 60,
         broadcaster: Any | None = None,
+        tool_executor: Callable[[str, str, str], Awaitable[list[dict[str, Any]]]] | None = None,
     ) -> None:
         self._registry = registry
         self._session_store = session_store
@@ -116,6 +120,7 @@ class MessageRouter:
         self._flush_lock = asyncio.Lock()
         self._max_inbox_messages = max_inbox_messages
         self._broadcaster = broadcaster
+        self._tool_executor = tool_executor
         # per-agent rolling summary cache: agent_name → summary markdown
         self._inbox_summary: dict[str, str] = {}
         self._recent_msgs: dict[tuple[str, tuple[str, ...]], list[float]] = {}
@@ -417,36 +422,45 @@ class MessageRouter:
             }
             return
 
-        run_input = self._build_run_input(agent_name, envelope)
         session = self._session_store.load(agent_name, self._thread_id)
         if session is None:
             session = agent.create_session()
 
-        full_reply: list[str] = []
-        try:
-            async for update in agent.run(run_input, session=session, stream=True):
-                if not update.contents:
-                    continue
-                for content in update.contents:
-                    if content.type == "text" and content.text:
-                        full_reply.append(content.text)
-                        yield {"type": "text_delta", "agent": agent_name, "delta": content.text}
-                    elif content.type == "text_reasoning":
-                        # Reasoning/thinking token — route to separate event
-                        # Use .text if available, fall back to protected_data prefix
-                        reasoning_text = content.text or ""
-                        if not reasoning_text and hasattr(content, "protected_data") and content.protected_data:
-                            reasoning_text = f"[reasoning data: {content.protected_data[:120]}]"
-                        if reasoning_text:
-                            yield {"type": "reasoning_delta", "agent": agent_name, "delta": reasoning_text}
-        except Exception as exc:
-            logger.exception("Agent '%s' raised an error", agent_name)
-            yield {"type": "error", "agent": agent_name, "message": str(exc)}
-        finally:
-            self._session_store.save(agent_name, self._thread_id, session)
+        current_envelope = envelope
+        auto_continue_rounds = 0
+        max_auto_continue_rounds = 3
+        tools_called = False
+        has_outgoing_comm = False
+        advisory_sent = False
 
-        reply_text = "".join(full_reply)
-        if reply_text.strip():
+        while True:
+            run_input = self._build_run_input(agent_name, current_envelope)
+            full_reply: list[str] = []
+            try:
+                async for update in agent.run(run_input, session=session, stream=True):
+                    if not update.contents:
+                        continue
+                    for content in update.contents:
+                        if content.type == "text" and content.text:
+                            full_reply.append(content.text)
+                            yield {"type": "text_delta", "agent": agent_name, "delta": content.text}
+                        elif content.type == "text_reasoning":
+                            # Reasoning/thinking token — route to separate event
+                            # Use .text if available, fall back to protected_data prefix
+                            reasoning_text = content.text or ""
+                            if not reasoning_text and hasattr(content, "protected_data") and content.protected_data:
+                                reasoning_text = f"[reasoning data: {content.protected_data[:120]}]"
+                            if reasoning_text:
+                                yield {"type": "reasoning_delta", "agent": agent_name, "delta": reasoning_text}
+            except Exception as exc:
+                logger.exception("Agent '%s' raised an error", agent_name)
+                yield {"type": "error", "agent": agent_name, "message": str(exc)}
+                break
+
+            reply_text = "".join(full_reply)
+            if not reply_text.strip():
+                break
+
             reply_meta: dict[str, Any] = {}
             if self.is_temp(agent_name):
                 reply_meta["is_temp"] = True
@@ -466,6 +480,37 @@ class MessageRouter:
                 "agent": agent_name,
                 "envelope": reply_envelope.to_dict(),
             }
+
+            should_continue = False
+            if self._tool_executor is not None:
+                try:
+                    tool_results = await self._tool_executor(self._thread_id, agent_name, reply_text)
+                except Exception:
+                    logger.exception("Tool executor failed for agent '%s'", agent_name)
+                    tool_results = []
+                if tool_results:
+                    tools_called = True
+                    if any((item.get("tool") or "") in _OUTGOING_COMM_TOOLS for item in tool_results):
+                        has_outgoing_comm = True
+                    formatted_results = [
+                        {
+                            "tool": item.get("tool", ""),
+                            "result": item.get("result", ""),
+                            "triggered_by": agent_name,
+                        }
+                        for item in tool_results
+                    ]
+                    yield {
+                        "type": "tool_results",
+                        "agent": agent_name,
+                        "results": formatted_results,
+                    }
+                    if auto_continue_rounds < max_auto_continue_rounds:
+                        feedback_env = self.record_tool_feedback(agent_name, tool_results)
+                        if feedback_env:
+                            current_envelope = Envelope.from_dict(feedback_env)
+                            auto_continue_rounds += 1
+                            should_continue = True
 
             # --- Escalation detection ---
             if depth < max_depth:
@@ -509,6 +554,25 @@ class MessageRouter:
                             _depth=depth + 1,
                         ):
                             yield esc_event
+            if not should_continue and tools_called and not has_outgoing_comm and not advisory_sent:
+                advisory_text = (
+                    "【系统提醒】你已获取工具执行结果，但尚未将结果传达给其他成员。"
+                    "请使用 send_message、assign_task 或 submit_deliverable 将结果整理后发送给下游成员，避免信息断层。"
+                )
+                advisory_env = self.record_system_advisory(
+                    to_agent=agent_name,
+                    text=advisory_text,
+                    metadata={"missing_handoff": True},
+                )
+                if advisory_env:
+                    current_envelope = Envelope.from_dict(advisory_env)
+                    advisory_sent = True
+                    should_continue = True
+            if should_continue:
+                continue
+            break
+
+        self._session_store.save(agent_name, self._thread_id, session)
 
     async def _collect_agent_events(
         self, **kwargs: Any

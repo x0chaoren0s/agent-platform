@@ -33,7 +33,11 @@ from agent_framework._types import Content
 from .capability_table import CapabilityTable
 from .llm import build_client
 from .memory import SQLiteHistoryProvider
-from .member_protocol import compose_member_instructions, compose_temp_instructions
+from .member_protocol import (
+    compose_base_instructions,
+    compose_member_instructions,
+    compose_temp_instructions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +115,9 @@ def _build_agent(
             effective_instructions = compose_temp_instructions(instructions)
         else:
             effective_instructions = compose_member_instructions(instructions)
+    else:
+        # Orchestrator and other roles should also inherit global behavior guardrails.
+        effective_instructions = compose_base_instructions(instructions)
     cfg["_effective_instructions"] = effective_instructions
 
     memory_provider = SQLiteHistoryProvider(
