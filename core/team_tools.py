@@ -17,6 +17,18 @@ _THREAD_PROJECT_DIR: dict[str, str] = {}
 _BROADCASTER: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
 
 
+def _as_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, (list, tuple, set)):
+        return [s for item in value if (s := str(item).strip())]
+    text = str(value).strip()
+    return [text] if text else []
+
+
 def set_router(thread_id: str, router: Any, *, project_dir: str | None = None) -> None:
     _ROUTERS[thread_id] = router
     if project_dir:
@@ -124,7 +136,8 @@ async def assign_task(
     if assignee not in agents:
         return f"错误：找不到 assignee '{assignee}'"
     store = await _get_task_store(project_dir)
-    deps = depends_on or []
+    deps = _as_list(depends_on)
+    context_refs = _as_list(context_refs)
     for dep in deps:
         dep_str = str(dep)
         if not dep_str.startswith("task-"):
@@ -149,7 +162,7 @@ async def assign_task(
         deadline=deadline,
         deliverable_kind=deliverable_kind,
         depends_on=deps,
-        context_refs=context_refs or [],
+        context_refs=context_refs,
     )
     created = await store.create(task)
     await _emit(thread_id, {"type": "task_event", "event": "created", "task": created.__dict__})
@@ -181,6 +194,8 @@ async def update_task(
         return f"错误：任务不存在：{task_id}"
     if caller_agent not in {task.assignee, task.created_by}:
         return f"错误：仅任务 owner 可更新，当前调用者={caller_agent}"
+    if task.status in {"done", "failed", "cancelled"}:
+        return f"错误：任务 {task_id} 已处于终态（{task.status}），不可再变更状态"
     if status and status not in {"in_progress", "blocked_on_user"}:
         return "错误：status 仅允许 in_progress 或 blocked_on_user"
     if status:
@@ -257,6 +272,23 @@ async def submit_deliverable(
     await _emit(updated.thread_id, {"type": "task_event", "event": "delivered", "task": updated.__dict__})
     for task_item in downstream:
         await _emit(task_item.thread_id, {"type": "task_event", "event": "ready", "task": task_item.__dict__})
+
+    # Auto-notify task creator so they always get a chat bubble, regardless of
+    # whether the assignee explicitly calls send_message afterward.
+    if router is not None and updated.created_by and updated.created_by != caller_agent:
+        notify_content = (
+            f"【任务交付】{task_id}「{updated.title}」已完成并提交。\n"
+            f"摘要：{summary}\n"
+            f"交付文件：workspace/{deliverable_path}"
+        )
+        await router.dispatch_internal(
+            sender=caller_agent,
+            to=[updated.created_by],
+            cc=[],
+            content=notify_content,
+            metadata={"type": "task_delivery_notice", "task_id": task_id},
+        )
+
     ready_text = ", ".join(t.id for t in downstream) if downstream else "无"
     refs_hint = f"，引用 {len(ref_lines)} 条" if ref_lines else ""
     return f"已交付 {task_id}：workspace/{deliverable_path}（ready_downstream={ready_text}{refs_hint}）"
@@ -301,11 +333,13 @@ async def send_message(
     cc: list[str] | None = None,
     related_task: str | None = None,
 ) -> str:
-    clean_to = sorted({name for name in to if name and name != caller_agent})
+    to_list = _as_list(to)
+    cc_list = _as_list(cc)
+    clean_to = sorted({name for name in to_list if name and name != caller_agent})
     if not clean_to:
         return "错误：to 不能为空"
     orchestrator = _orchestrator_name(Path(project_dir))
-    final_cc = sorted(set(cc or []))
+    final_cc = sorted(set(cc_list))
     if caller_agent != orchestrator and orchestrator not in final_cc:
         final_cc.append(orchestrator)
     router = _ROUTERS.get(thread_id)

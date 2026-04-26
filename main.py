@@ -860,7 +860,7 @@ async def restore_checkpoint(checkpoint_id: str, body: dict | None = None):
 # Orchestrator tool-call parser (for WS and REST)
 # ---------------------------------------------------------------------------
 
-_TOOL_CALL_RE = re.compile(r"```tool_call\s*\n(.*?)\n```", re.DOTALL)
+_TOOL_CALL_RE = re.compile(r"```tool_call\s*\n(.*?)(?:\n```|$)", re.DOTALL)
 
 
 async def _agent_tool_executor(thread_id: str, agent_name: str, reply_text: str) -> list[dict[str, Any]]:
