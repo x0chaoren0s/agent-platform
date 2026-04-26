@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable
 
 import yaml
 
+from . import web_tools
 from .question_store import QuestionStore, UserQuestion
 from .task_store import Task, TaskStore
 
@@ -201,6 +202,7 @@ async def submit_deliverable(
     content: str | None = None,
     file_path: str | None = None,
     summary: str,
+    references: list[str] | None = None,
     **kwargs: Any,
 ) -> str:
     if not task_id or not str(task_id).strip():
@@ -216,12 +218,28 @@ async def submit_deliverable(
         return f"错误：仅 assignee 可交付，当前调用者={caller_agent}"
     if bool(content) == bool(file_path):
         return "错误：content 与 file_path 必须二选一"
+
+    auto_refs = web_tools.consume_url_history(thread_id, caller_agent)
+    explicit_refs = [str(r).strip() for r in (references or []) if str(r).strip()]
+    ref_lines: list[str] = []
+    for item in auto_refs:
+        url = item.get("url", "")
+        title = item.get("title", "")
+        if url:
+            ref_lines.append(f"- [{title or url}]({url})")
+    for r in explicit_refs:
+        ref_lines.append(f"- {r}")
+    refs_section = ""
+    if ref_lines:
+        refs_section = "\n\n## References\n" + "\n".join(ref_lines) + "\n"
+
     deliverable_path = file_path
     if content is not None:
+        full_content = content + refs_section
         safe_title = "".join(c if c.isalnum() else "-" for c in task.title.lower()).strip("-")
         safe_title = safe_title or "deliverable"
         rel_path = f"{task_id}-{safe_title[:32]}.md"
-        deliverable_path = store.write_deliverable_file(rel_path, content)
+        deliverable_path = store.write_deliverable_file(rel_path, full_content)
     assert deliverable_path is not None
     updated = await store.submit_deliverable(
         task_id,
@@ -240,7 +258,8 @@ async def submit_deliverable(
     for task_item in downstream:
         await _emit(task_item.thread_id, {"type": "task_event", "event": "ready", "task": task_item.__dict__})
     ready_text = ", ".join(t.id for t in downstream) if downstream else "无"
-    return f"已交付 {task_id}：workspace/{deliverable_path}（ready_downstream={ready_text}）"
+    refs_hint = f"，引用 {len(ref_lines)} 条" if ref_lines else ""
+    return f"已交付 {task_id}：workspace/{deliverable_path}（ready_downstream={ready_text}{refs_hint}）"
 
 
 async def list_tasks(

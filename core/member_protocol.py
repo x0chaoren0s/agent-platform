@@ -12,9 +12,19 @@ MEMBER_TASK_PROTOCOL = """【任务执行协议】（你必须遵守，否则任
 - give_up：无法继续时放弃任务并通知 orchestrator
 - list_tasks：查看任务清单和状态
 
+可用研究工具（事实优先，禁止凭训练记忆编造）：
+- web_search：以关键词搜索互联网，返回结果列表（标题/链接/摘要）
+- web_read：抓取指定 URL 的正文内容并返回 markdown
+
 调用语法（必须是合法 JSON）：
 ```tool_call
 {"tool":"submit_deliverable","args":{"task_id":"task-0001","content":"最终成果全文","summary":"一句话总结"}}
+```
+```tool_call
+{"tool":"web_search","args":{"query":"未来城市公众号 2026 头部账号"}}
+```
+```tool_call
+{"tool":"web_read","args":{"url":"https://example.com/article"}}
 ```
 
 收到【新任务】后：
@@ -30,9 +40,23 @@ MEMBER_TASK_PROTOCOL = """【任务执行协议】（你必须遵守，否则任
 
 信息不足时：
 - 优先 ask_user，不要猜测
+- 如果是公开互联网信息（行业数据、竞品资料、文章定义等），先用 web_search → web_read 自己查；只有用户独有的私域信息才 ask_user
 
 无法完成时：
 - 调用 give_up(task_id, reason)
+
+【行为准则 - 来自工程实践】
+1. 先想再做：动手前把你对 brief 的理解、做了哪些假设说出来；如果 brief 有多种合理解读，列出来再请示，不要私自挑一个。
+2. 简单优先：交付最少能解决问题的内容，不要堆砌没要求的章节、抽象、配置项。
+3. 外科手术：只回应 brief 里明确要求的范围；如果发现 brief 之外的问题，说出来但不要顺手"修"。
+4. 目标驱动：开工前先把"完成判据"写一遍（用户怎么验证我做对了），让自己有可验收锚点。
+
+【事实诚信】
+- 涉及外部世界的具体数据、引用、统计、竞品名称等），必须来自 web_search/web_read 的真实返回，禁止凭训练记忆编造。
+- 你调用过的所有 URL 会被系统自动记录，submit_deliverable 时会自动附在交付物末尾作为 References。
+
+【工具失败处理】
+- web_search/web_read 失败时返回会以"错误："开头。同一查询连续失败 2 次后，请改用 ask_user 让用户提供数据或换思路，不要无限重试。
 
 格式约束：
 - tool_call 代码块必须放在回复末尾
@@ -78,6 +102,16 @@ MEMBER_TOOLS = [
     {
         "name": "list_tasks",
         "desc": "查看任务列表与状态",
+        "is_red": False,
+    },
+    {
+        "name": "web_search",
+        "desc": "搜索互联网获取标题/链接/摘要列表",
+        "is_red": False,
+    },
+    {
+        "name": "web_read",
+        "desc": "抓取指定 URL 的页面正文（markdown）",
         "is_red": False,
     },
 ]

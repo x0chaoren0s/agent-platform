@@ -53,6 +53,7 @@ from core.checkpoint_store import CheckpointStore
 from core import knowledge_base as kb_mod
 from core import summarizer as summarizer_mod
 from core import team_tools
+from core import web_tools
 from core.platform_tools import (
     list_team,
     recruit_fixed,
@@ -194,6 +195,21 @@ async def _get_question_store(thread_id: str) -> QuestionStore:
 async def lifespan(app: FastAPI):
     global _heartbeat_scheduler
     _activate(_current_project)
+    fc_key = os.environ.get("FIRECRAWL_API_KEY", "").strip()
+    if not fc_key:
+        logger.warning(
+            "FIRECRAWL_API_KEY not set — web_search/web_read will return errors. "
+            "Configure it in .env to enable web tools."
+        )
+    else:
+        try:
+            from firecrawl import FirecrawlApp  # noqa: F401
+            logger.info("Firecrawl SDK available; web tools enabled.")
+        except Exception:
+            logger.warning(
+                "firecrawl-py package not installed; web_search/web_read will return errors. "
+                "Run: pip install firecrawl-py"
+            )
     if _conv_store:
         await _conv_store.init_db()
     if _checkpoint_store:
@@ -921,6 +937,30 @@ async def _execute_tool(
         return await kb_mod.kb_write(project_dir=project_dir, **args)
     elif tool_name == "kb_search":
         return await kb_mod.kb_search(project_dir=project_dir, **args)
+    elif tool_name == "web_search":
+        try:
+            return await web_tools.web_search(
+                thread_id=thread_id,
+                caller_agent=caller_agent,
+                **args,
+            )
+        except TypeError as exc:
+            return f"工具调用参数错误（web_search）：{exc}"
+        except Exception as exc:
+            logger.exception("web_search execution error")
+            return f"工具调用异常（web_search）：{exc}"
+    elif tool_name == "web_read":
+        try:
+            return await web_tools.web_read(
+                thread_id=thread_id,
+                caller_agent=caller_agent,
+                **args,
+            )
+        except TypeError as exc:
+            return f"工具调用参数错误（web_read）：{exc}"
+        except Exception as exc:
+            logger.exception("web_read execution error")
+            return f"工具调用异常（web_read）：{exc}"
     elif tool_name in team_tools.TEAM_TOOL_DISPATCH:
         fn = team_tools.TEAM_TOOL_DISPATCH[tool_name]
         try:
