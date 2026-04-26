@@ -367,15 +367,42 @@
   .top-actions { margin-left: auto; display: flex; gap: 8px; }
   .inbox-bell { position: relative; }
   .inbox-bell .badge { position: absolute; top: -5px; right: -5px; background: #ef4444; color: #fff; border-radius: 12px; font-size: 10px; min-width: 16px; padding: 0 4px; text-align: center; }
-  .task-card { border-radius: 10px; border: 1px solid #2a3142; background: #0d1320; padding: 10px 12px; margin: 6px 0; }
+  .task-card { position: relative; border-radius: 10px; border: 1px solid #2a3142; background: #0d1320; padding: 10px 12px; margin: 6px 0; }
   .tc-head { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #94a3b8; }
   .tc-title { color: #e2e8f0; font-weight: 600; margin: 4px 0; }
   .tc-meta { font-size: 11px; color: #64748b; }
+  .tc-meta-row { display: flex; gap: 8px; align-items: center; font-size: 11px; color: #64748b; margin-top: 4px; }
+  .task-card.task-blocked { border-left: 3px solid #fbbf24; }
+  .task-card .tc-blocked-tag { position: absolute; top: 8px; right: 10px; font-size: 10px; color: #fbbf24; }
+  .task-card.task-failed { border-left: 3px solid #ef4444; opacity: .85; }
+  .task-card.task-failed .tc-title { color: #94a3b8; }
   .kanban-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: none; z-index: 80; }
   .kanban-overlay.open { display: block; }
   .kanban-board { margin: 20px; background: #0b1020; border: 1px solid #2a3142; border-radius: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 12px; }
   .kanban-col { background: #0d1320; border: 1px solid #2a3142; border-radius: 8px; min-height: 180px; padding: 8px; }
+  .kanban-exception-zone { grid-column: 1 / -1; margin-top: 8px; border-top: 1px dashed #2a3142; padding-top: 8px; }
+  .kanban-exception-zone summary { cursor: pointer; color: #94a3b8; font-size: 12px; padding: 4px 6px; }
+  .kanban-exception-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
   .q-card { border-left: 3px solid #fbbf24; background: #1a1410; padding: 10px 12px; margin: 6px 0; border-radius: 6px; }
+  .q-card-inbox { cursor: pointer; transition: background .12s; }
+  .q-card-inbox:hover { background: #21180d; }
+  .q-card-inbox .q-card-meta { font-size: 11px; color: #94a3b8; margin-bottom: 4px; }
+  .q-card-inbox .q-card-question {
+    color: #e2e8f0;
+    font-size: 13px;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  @keyframes pulse-highlight {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0); }
+    50% { box-shadow: 0 0 0 4px rgba(251, 191, 36, .6); }
+  }
+  .q-card-flash { animation: pulse-highlight .75s ease-in-out 2; }
   .q-options { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
   .inbox-drawer { position: fixed; right: 0; top: 0; width: 360px; height: 100vh; background: #0a0e16; border-left: 1px solid #2a3142; transform: translateX(100%); transition: transform .2s; z-index: 90; padding: 14px; overflow: auto; }
   .inbox-drawer.open { transform: translateX(0); }
@@ -589,6 +616,22 @@ function color(name) {
 }
 function escHtml(s) {
   return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function formatTaskTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '-';
+  const now = new Date();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  if (sameDay) return `${hh}:${mm}`;
+  const mon = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${mon}-${day} ${hh}:${mm}`;
 }
 
 function renderMd(text) {
@@ -1255,7 +1298,7 @@ function appendEscalation(data) {
 // Strip ```tool_call blocks from display text and return them separately
 function extractToolCalls(text) {
   const blocks = [];
-  const cleaned = text.replace(/```tool_call\s*\n([\s\S]*?)\n```/g, (_, body) => {
+  const cleaned = text.replace(/```tool_call\s*\n([\s\S]*?)(?:\n```|$)/g, (_, body) => {
     blocks.push(body.trim());
     return '';
   }).trim();
@@ -1381,18 +1424,42 @@ function updateTaskCardInPlace(task) {
 function openKanban() { el('kanbanOverlay').classList.add('open'); }
 function closeKanban() { el('kanbanOverlay').classList.remove('open'); }
 function renderKanban(tasks) {
+  function renderKanbanCard(t) {
+    const extraClass = t.status === 'blocked_on_user'
+      ? ' task-blocked'
+      : (t.status === 'failed' ? ' task-failed' : '');
+    const blockedTag = t.status === 'blocked_on_user'
+      ? '<div class="tc-blocked-tag">⏸ 等用户</div>'
+      : '';
+    return `<div class="task-card${extraClass}">
+      ${blockedTag}
+      <div class="tc-head">${escHtml(t.id || '')}</div>
+      <div class="tc-title">${escHtml(t.title || '')}</div>
+      <div class="tc-meta-row">
+        <span>👤 ${escHtml(t.assignee || '-')}</span>
+        <span>${escHtml(formatTaskTime(t.updated_at))}</span>
+      </div>
+    </div>`;
+  }
+
   const cols = [
     ['pending', '待开始'],
     ['ready', '就绪'],
     ['in_progress', '进行中'],
     ['done', '已完成'],
   ];
-  el('kanbanBoard').innerHTML = cols.map(([key, title]) => {
-    const cards = tasks.filter(t => t.status === key).map(t =>
-      `<div class="task-card">${escHtml(t.id)}<div class="tc-title">${escHtml(t.title || '')}</div></div>`
-    ).join('');
+  const mainColsHtml = cols.map(([key, title]) => {
+    const cards = tasks.filter(t => {
+      if (key === 'in_progress') return t.status === 'in_progress' || t.status === 'blocked_on_user';
+      return t.status === key;
+    }).map(renderKanbanCard).join('');
     return `<div class="kanban-col"><h3>${title}</h3>${cards || '<div class="tc-meta">空</div>'}</div>`;
   }).join('');
+  const failedCards = tasks.filter(t => t.status === 'failed').map(renderKanbanCard).join('');
+  const exceptionHtml = failedCards
+    ? `<details class="kanban-exception-zone"><summary>异常 (${tasks.filter(t => t.status === 'failed').length})</summary><div class="kanban-exception-list">${failedCards}</div></details>`
+    : '';
+  el('kanbanBoard').innerHTML = mainColsHtml + exceptionHtml;
 }
 
 async function fetchTasks() {
@@ -1436,9 +1503,30 @@ function updateInboxBadge(count) {
 }
 function openInboxDrawer() { closeAgentInspector(); el('inboxDrawer').classList.add('open'); renderInboxList(pendingQuestions); }
 function closeInboxDrawer() { el('inboxDrawer').classList.remove('open'); }
+function jumpToQuestionBubble(qId) {
+  closeInboxDrawer();
+  const node = document.getElementById(`q-card-${qId}`);
+  if (!node) {
+    showToast('该问题不在当前视图');
+    return;
+  }
+  node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  node.classList.remove('q-card-flash');
+  void node.offsetWidth;
+  node.classList.add('q-card-flash');
+  setTimeout(() => node.classList.remove('q-card-flash'), 1600);
+}
 function renderInboxList(questions) {
+  const cards = questions.map(q => {
+    const related = q.related_task ? ` · 📋${escHtml(q.related_task)}` : '';
+    const meta = `${escHtml(q.id || '')} · 👤${escHtml(q.asker || '-')}${related} · ${escHtml(formatTaskTime(q.asked_at))}`;
+    return `<div class="q-card q-card-inbox" onclick="jumpToQuestionBubble('${q.id}')" title="${escHtml(q.question || '')}">
+      <div class="q-card-meta">${meta}</div>
+      <div class="q-card-question">${escHtml(q.question || '')}</div>
+    </div>`;
+  }).join('');
   el('inboxDrawer').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><b>待办提问</b><button class="icon-btn" onclick="closeInboxDrawer()">✕</button></div>` +
-    (questions.length ? questions.map(q => `<div class="q-card">${escHtml(q.id)} · ${escHtml(q.question)}</div>`).join('') : '<div class="tc-meta">暂无待办</div>');
+    (questions.length ? cards : '<div class="tc-meta">暂无待办</div>');
 }
 async function openAgentInspector(name) {
   closeInboxDrawer();
@@ -1515,6 +1603,13 @@ async function fetchPendingQuestions() {
   pendingQuestions = (data && data.data) || [];
   updateInboxBadge(pendingQuestions.length);
   renderInboxList(pendingQuestions);
+  // After page reload the real-time q-card nodes no longer exist; recreate them so
+  // jumpToQuestionBubble can find an anchor and the user can still answer in-chat.
+  for (const q of pendingQuestions) {
+    if (!document.getElementById(`q-card-${q.id}`)) {
+      appendQuestionCard(q);
+    }
+  }
   return pendingQuestions;
 }
 
