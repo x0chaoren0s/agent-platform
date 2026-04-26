@@ -1877,8 +1877,9 @@ function connect() {
       // system_advisory envelopes are injected into agent inbox but the agent
       // does not start streaming immediately — skip pre-emptive bubble creation
       if (!ev.envelope.metadata?.system_advisory) {
+        // Only pre-create stream bubbles for direct recipients (To).
+        // CC recipients get their bubble lazily on first text_delta to avoid ghost bubbles.
         (ev.envelope.to||[]).forEach(n => { if (n !== 'user') startStreamBubble(n); });
-        (ev.envelope.cc||[]).forEach(n => { if (n !== 'user') startStreamBubble(n); });
       }
       return;
     }

@@ -251,9 +251,9 @@ async def lifespan(app: FastAPI):
         await _checkpoint_store.init_db()
     if _conv_store:
         _heartbeat_scheduler = HeartbeatScheduler(
-            interval_seconds=5,
-            thresholds_seconds={"high": 20, "normal": 10, "low": 120},
-            advisory_min_gap_seconds=60,
+            interval_seconds=2,
+            thresholds_seconds={"high": 12, "normal": 8, "low": 60},
+            advisory_min_gap_seconds=30,
             conversation_store=_conv_store,
             thread_ids_provider=lambda: list(_routers.keys()),
             project_dir_provider=team_tools.get_project_dir,
@@ -347,6 +347,9 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
       - 收到 give_up/失败通知后，评估重派、拆解或请用户决策。
       - 若用户请求“前N条/再来N条/额外N条”这类数量型搜索任务，在 brief 里必须明确写入“web_search 需传 limit=N”。
       - 【固定成员优先原则】需要 web_search / web_read 的搜索或调研任务，应优先 assign_task 给具备该能力的固定成员（如数据分析师），由其执行并 submit_deliverable 落盘；只有当团队中无任何成员具备所需能力时，才 recruit_temp 作为兜底。
+      - 【禁止提前整合】上游任务状态仍为 in_progress 时，严禁根据中途收到的零散消息提前整合结论或撰写最终报告；必须等到上游成员的【任务交付】通知到达（即对方 submit_deliverable 后系统推送的通知）后，再开始下游整合。
+      - 【数据来源约束】整合报告时只允许引用已落盘的 submit_deliverable 内容；禁止凭训练记忆或推断补充交付物中未出现的数据（如定价数字、版本号等），如数据不足应向上游追加搜索任务。
+      - 【定价任务 brief 要求】向下游分配涉及价格/版本的调研任务时，brief 中必须注明："对于价格、版本号等具体数值，必须通过 web_read 读取官方定价页原文核实，不得仅凭搜索摘要使用"。
 
       【内部通信协议】
       - 可使用 send_message 协调成员；普通成员发消息也会自动 CC orchestrator。
@@ -899,58 +902,85 @@ async def _process_tool_calls(
                 }
             )
             continue
-        if not isinstance(payload, dict):
+        if isinstance(payload, list):
+            payloads: list[Any] = payload
+        elif isinstance(payload, dict):
+            payloads = [payload]
+        else:
+            payloads = []
+
+        if not payloads:
             snippet = m.group(1).strip().replace("\n", " ")
             if len(snippet) > 180:
                 snippet = snippet[:180] + "..."
             results.append(
                 {
                     "tool": "tool_call_parse_error",
-                    "result": f"工具调用解析失败：tool_call 不是 JSON 对象。片段：{snippet}",
+                    "result": f"工具调用解析失败：tool_call 既不是 JSON 对象也不是对象数组。片段：{snippet}",
                 }
             )
             continue
-        tool_name: str = payload.get("tool", "")
-        args: dict = payload.get("args", {})
 
-        result = await _execute_tool(
-            tool_name,
-            args,
-            project_dir,
-            thread_id=thread_id,
-            caller_agent=caller_agent,
-        )
-        results.append({"tool": tool_name, "result": result})
-        logger.info("Tool call executed: %s → %s", tool_name, result[:80])
+        for item in payloads:
+            if not isinstance(item, dict):
+                results.append(
+                    {
+                        "tool": "tool_call_parse_error",
+                        "result": f"工具调用解析失败：数组元素不是 JSON 对象（type={type(item).__name__}）。",
+                    }
+                )
+                continue
 
-        # If a temp agent was recruited (or reused), register it and dispatch task
-        if tool_name == "recruit_temp":
-            temp_name = ""
-            if result.startswith("RECRUIT_TEMP_DONE:"):
-                temp_name = result.split(":", 1)[1].strip()
-            elif "复用现有临时工" in result:
-                # e.g. "复用现有临时工 '搜索助手'。"
-                m2 = re.search(r"'(.+?)'", result)
-                if m2:
-                    temp_name = m2.group(1).strip()
-            if temp_name:
-                # Force-load YAML into registry immediately (watchdog has latency)
-                temp_yaml = project_dir / "agents" / f"{temp_name}.yaml"
-                if _registry is not None and temp_yaml.exists():
-                    try:
-                        _registry._load_file(temp_yaml)  # noqa: SLF001
-                    except Exception:
-                        logger.exception("Failed to force-load temp agent YAML: %s", temp_name)
-                for r in _routers.values():
-                    r.register_temp_agent(temp_name)
-                task_content = str(args.get("task", "")).strip()
-                if task_content:
-                    await _get_router(thread_id).dispatch_internal(
-                        sender=caller_agent,
-                        to=[temp_name],
-                        cc=[],
-                        content=task_content,
-                    )
+            tool_name: str = str(item.get("tool", "")).strip()
+            args_raw = item.get("args", {})
+            args: dict[str, Any] = args_raw if isinstance(args_raw, dict) else {}
+            if not tool_name:
+                results.append(
+                    {
+                        "tool": "tool_call_parse_error",
+                        "result": "工具调用解析失败：缺少 tool 字段。",
+                    }
+                )
+                continue
+
+            result = await _execute_tool(
+                tool_name,
+                args,
+                project_dir,
+                thread_id=thread_id,
+                caller_agent=caller_agent,
+            )
+            results.append({"tool": tool_name, "result": result})
+            logger.info("Tool call executed: %s → %s", tool_name, result[:80])
+
+            # If a temp agent was recruited (or reused), register it and dispatch task
+            if tool_name == "recruit_temp":
+                temp_name = ""
+                if result.startswith("RECRUIT_TEMP_DONE:"):
+                    temp_name = result.split(":", 1)[1].strip()
+                elif "复用现有临时工" in result:
+                    # e.g. "复用现有临时工 '搜索助手'。"
+                    m2 = re.search(r"'(.+?)'", result)
+                    if m2:
+                        temp_name = m2.group(1).strip()
+                if temp_name:
+                    # Force-load YAML into registry immediately (watchdog has latency)
+                    temp_yaml = project_dir / "agents" / f"{temp_name}.yaml"
+                    if _registry is not None and temp_yaml.exists():
+                        try:
+                            _registry._load_file(temp_yaml)  # noqa: SLF001
+                        except Exception:
+                            logger.exception("Failed to force-load temp agent YAML: %s", temp_name)
+                    for r in _routers.values():
+                        r.register_temp_agent(temp_name)
+                    task_content = str(args.get("task", "")).strip()
+                    if task_content:
+                        await _get_router(thread_id).dispatch_internal(
+                            sender=caller_agent,
+                            to=[temp_name],
+                            cc=[],
+                            content=task_content,
+                        )
     return results
 
 
