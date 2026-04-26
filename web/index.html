@@ -137,8 +137,8 @@
   .tag.cc { background: #1a2e23; color: #34d399; }
   .tag.auto { background: #2a1f40; color: var(--accent2); }
   .tag.temp-tag { background: #2a1840; color: var(--accent2); border: 1px solid var(--accent2); }
-  .bubble { padding: 9px 13px; border-radius: var(--radius); font-size: 14px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; position: relative; }
-  .bubble.md-mode { white-space: normal; }
+  .bubble { padding: 9px 13px; border-radius: var(--radius); font-size: 14px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; position: relative; max-height: 400px; overflow-y: auto; }
+  .bubble.md-mode { white-space: normal; overflow-y: auto; }
   .bubble.md-mode p { margin: 0 0 .5em; }
   .bubble.md-mode p:last-child { margin-bottom: 0; }
   .bubble.md-mode h1,.bubble.md-mode h2,.bubble.md-mode h3 { margin: .6em 0 .3em; font-weight: 600; }
@@ -153,6 +153,7 @@
   .bubble.md-mode table { border-collapse: collapse; font-size: 13px; margin: .4em 0; }
   .bubble.md-mode th,.bubble.md-mode td { border: 1px solid var(--border); padding: 3px 8px; }
   .md-toggle-btn { position: absolute; bottom: 4px; right: 28px; background: rgba(255,255,255,.08); border: none; border-radius: 4px; color: var(--muted); font-size: 10px; padding: 1px 5px; cursor: pointer; opacity: 0; transition: opacity .15s; }
+  .md-toggle-btn.copy-btn { right: 52px; }
   .msg-wrap:hover .md-toggle-btn { opacity: 1; }
   .msg-wrap.user  .bubble { background: var(--user); color: #fff; border-bottom-right-radius: 3px; }
   .msg-wrap.agent .bubble { background: var(--surface2); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
@@ -593,14 +594,27 @@ function escHtml(s) {
 function renderMd(text) {
   if (typeof marked === 'undefined') return escHtml(text);
   try {
-    return marked.parse(text || '', { breaks: true, gfm: true });
+    const html = marked.parse(text || '', { breaks: true, gfm: true });
+    return html.replace(/<a\s+href=/g, '<a target="_blank" rel="noopener" href=');
   } catch(e) {
     return escHtml(text);
   }
 }
 
-function toggleMdBubble(btn) {
+function copyBubble(btn) {
   const bubble = btn.previousElementSibling;
+  const raw = bubble && bubble.getAttribute('data-raw');
+  if (!raw) return;
+  navigator.clipboard.writeText(raw).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✓';
+    setTimeout(() => { btn.textContent = orig; }, 1200);
+  });
+}
+
+function toggleMdBubble(btn) {
+  // DOM order: .bubble → .copy-btn → .md-toggle-btn → .msg-pin-btn
+  const bubble = btn.previousElementSibling?.previousElementSibling;
   if (!bubble || !bubble.classList.contains('bubble')) return;
   const raw = bubble.getAttribute('data-raw') || '';
   const isMd = bubble.classList.contains('md-mode');
@@ -1079,10 +1093,18 @@ async function fetchAgentsOnce() {
   return agents;
 }
 
+function _agentNameSnapshot(agents) {
+  return (agents || []).map(a => a.name).sort().join('|');
+}
+
 async function refreshAgentsWithRetry(retries = 4, delayMs = 300) {
+  const before = _agentNameSnapshot(allAgents);
   for (let i = 0; i < retries; i++) {
     const agents = await fetchAgentsOnce();
-    if (agents && agents.length > 1) return;
+    if (!agents) continue;
+    const after = _agentNameSnapshot(agents);
+    // Wait until team roster actually changes to avoid watchdog lag.
+    if (after !== before) return;
     if (i < retries - 1) {
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
@@ -1286,6 +1308,7 @@ function updateStreamToolCallFold(name, toolBlocks, partial) {
 }
 
 function appendMessage(env) {
+  if (env.metadata && env.metadata.tool_feedback) return;
   const isUser = env.sender === 'user';
   const isTemp = env.metadata && env.metadata.is_temp;
   const isAutoFwd = env.metadata && env.metadata.auto_forward;
@@ -1328,6 +1351,7 @@ function appendMessage(env) {
     </div>
     ${toolCallsHtml}
     ${hasMainBubble ? `<div class="bubble md-mode" data-raw="${escHtml(cleaned)}">${renderMd(cleaned)}${imgsHtml}</div>` : ''}
+    ${hasMainBubble ? `<button class="md-toggle-btn copy-btn" onclick="copyBubble(this)" title="复制原文">📋</button>` : ''}
     ${hasMainBubble ? `<button class="md-toggle-btn" onclick="toggleMdBubble(this)" title="切换为纯文本">MD</button>` : ''}
     ${pinBtn}`;
   el('msgList').appendChild(wrap);
@@ -1766,17 +1790,28 @@ function connect() {
     if (ev.type === 'text_delta') { appendDelta(ev.agent, ev.delta); return; }
     if (ev.type === 'reasoning_delta') { appendReasoningChunk(ev.agent, ev.delta); return; }
     if (ev.type === 'agent_done') { finalizeStream(ev.agent, ev.envelope); return; }
+    if (ev.type === 'tool_results') {
+      const items = Array.isArray(ev.results) ? ev.results : [];
+      items.forEach(item => {
+        appendToolResult(item.tool, item.result, item.triggered_by);
+      });
+      if (items.some(item => item.tool === 'recruit_fixed' || item.tool === 'dismiss_member')) {
+        refreshAgentsWithRetry(8, 350);
+      }
+      return;
+    }
+    // Backward compatibility for older backend events.
     if (ev.type === 'tool_result') {
       appendToolResult(ev.tool, ev.result, ev.triggered_by);
       if (ev.tool === 'recruit_fixed' || ev.tool === 'dismiss_member') {
-        refreshAgentsWithRetry();
+        refreshAgentsWithRetry(8, 350);
       }
       return;
     }
     if (ev.type === 'agents_updated') {
       renderAgents(ev.agents || []);
       // Hot-reload may lag a little; retry pull once in background for consistency.
-      refreshAgentsWithRetry(3, 250);
+      refreshAgentsWithRetry(8, 350);
       showToast('团队成员已更新');
       return;
     }
