@@ -33,7 +33,7 @@ from agent_framework._types import Content
 from .capability_table import CapabilityTable
 from .llm import build_client
 from .memory import SQLiteHistoryProvider
-from .member_protocol import compose_member_instructions
+from .member_protocol import compose_member_instructions, compose_temp_instructions
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +106,11 @@ def _build_agent(
     role: str = cfg.get("role", "member")
     is_temp: bool = cfg.get("is_temp", False)
     effective_instructions = instructions
-    if role == "member" and not is_temp:
-        effective_instructions = compose_member_instructions(instructions)
+    if role == "member":
+        if is_temp:
+            effective_instructions = compose_temp_instructions(instructions)
+        else:
+            effective_instructions = compose_member_instructions(instructions)
     cfg["_effective_instructions"] = effective_instructions
 
     memory_provider = SQLiteHistoryProvider(

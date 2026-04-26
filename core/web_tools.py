@@ -89,19 +89,29 @@ async def web_search(
         logger.exception("web_search failed: %s", exc)
         return f"错误：web_search 调用失败：{exc}"
 
-    items: list[dict] = []
-    if isinstance(result, dict):
+    # SDK v4+ returns a Pydantic SearchData object with a .web list attribute
+    items: list[Any] = []
+    if hasattr(result, "web") and result.web:
+        items = result.web
+    elif isinstance(result, dict):
         items = result.get("data") or result.get("web") or []
     elif isinstance(result, list):
         items = result
+
     if not items:
         return f"web_search('{query}') 无结果。"
 
     lines = [f"web_search('{query}') 共 {len(items)} 条结果："]
     for i, item in enumerate(items, 1):
-        url = str(item.get("url") or "").strip()
-        title = str(item.get("title") or "").strip()
-        snippet = str(item.get("description") or item.get("snippet") or "").strip()
+        # Support both Pydantic objects and plain dicts
+        if hasattr(item, "url"):
+            url = str(item.url or "").strip()
+            title = str(item.title or "").strip()
+            snippet = str(item.description or "").strip()
+        else:
+            url = str(item.get("url") or "").strip()
+            title = str(item.get("title") or "").strip()
+            snippet = str(item.get("description") or item.get("snippet") or "").strip()
         snippet = _truncate(snippet, _SEARCH_SNIPPET_MAX)
         lines.append(f"\n{i}. [{title or url}]({url})\n   {snippet}")
         _record_url(thread_id, caller_agent, url, title)
@@ -114,27 +124,34 @@ async def web_read(
     caller_agent: str,
     url: str,
 ) -> str:
-    """Fetch page content as markdown via Firecrawl scrape_url."""
+    """Fetch page content as markdown via Firecrawl scrape."""
     if not url or not str(url).strip():
         return "错误：web_read 必须提供 url。"
     app = _get_app()
     if app is None:
         return "错误：FIRECRAWL_API_KEY 未配置或 firecrawl-py 包未安装。"
     try:
-        result = app.scrape_url(url=str(url), params={"formats": ["markdown"]})
+        result = app.scrape(str(url), formats=["markdown"])
     except Exception as exc:
         logger.exception("web_read failed: %s", exc)
         return f"错误：web_read 调用失败：{exc}"
 
     markdown = ""
     title = ""
-    if isinstance(result, dict):
+    # SDK v4+ returns a Pydantic Document object
+    if hasattr(result, "markdown"):
+        markdown = str(result.markdown or "")
+        meta = getattr(result, "metadata", None)
+        if meta is not None:
+            title = str(getattr(meta, "title", "") or "")
+    elif isinstance(result, dict):
         data = result.get("data") if "data" in result else result
         if isinstance(data, dict):
             markdown = str(data.get("markdown") or data.get("content") or "")
             meta = data.get("metadata") or {}
             if isinstance(meta, dict):
                 title = str(meta.get("title") or meta.get("og:title") or "")
+
     if not markdown:
         return f"web_read('{url}') 拿到空内容。"
     _record_url(thread_id, caller_agent, str(url), title)

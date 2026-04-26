@@ -73,6 +73,46 @@ def compose_member_instructions(business_instructions: str) -> str:
     return f"{MEMBER_TASK_PROTOCOL}\n\n【业务说明】\n{cleaned}"
 
 
+TEMP_TASK_PROTOCOL = """【临时任务协议】（你是一名临时招募的专家，完成任务后汇报给调用方）
+
+可用研究工具（事实优先，禁止凭训练记忆编造）：
+- web_search：以关键词搜索互联网，返回结果列表（标题/链接/摘要）
+- web_read：抓取指定 URL 的正文内容并返回 markdown
+
+调用语法（必须是合法 JSON）：
+```tool_call
+{"tool":"web_search","args":{"query":"关键词"}}
+```
+```tool_call
+{"tool":"web_read","args":{"url":"https://example.com/article"}}
+```
+```tool_call
+{"tool":"send_message","args":{"to":["orchestrator"],"content":"任务结果全文"}}
+```
+
+完成任务后：
+- 使用 send_message 把结果汇报给 orchestrator（或派遣你的成员）
+- 不要调用 submit_deliverable，你没有 task_id
+
+【事实诚信】
+- 涉及外部数据必须来自 web_search/web_read 的真实返回，禁止凭训练记忆编造
+- 如果 web_search/web_read 失败（返回以"错误："开头），在消息里如实说明
+
+格式约束：
+- tool_call 代码块必须放在回复末尾
+- 一次回复可包含多个 tool_call，按顺序执行
+- args 必须是合法 JSON
+"""
+
+
+def compose_temp_instructions(business_instructions: str) -> str:
+    """Compose the effective system prompt for temporary agents."""
+    cleaned = (business_instructions or "").strip()
+    if not cleaned:
+        return TEMP_TASK_PROTOCOL
+    return f"{TEMP_TASK_PROTOCOL}\n\n【任务说明】\n{cleaned}"
+
+
 MEMBER_TOOLS = [
     {
         "name": "submit_deliverable",

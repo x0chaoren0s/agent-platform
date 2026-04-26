@@ -842,13 +842,65 @@ async def _process_tool_calls(
         results.append({"tool": tool_name, "result": result})
         logger.info("Tool call executed: %s → %s", tool_name, result[:80])
 
-        # If a temp agent was recruited, register it in active routers
-        if tool_name == "recruit_temp" and result.startswith("RECRUIT_TEMP_DONE:"):
-            temp_name = result.split(":", 1)[1]
-            for router in _routers.values():
-                router.register_temp_agent(temp_name)
-            # Registry will pick it up via watchdog shortly
+        # If a temp agent was recruited (or reused), register it and dispatch task
+        if tool_name == "recruit_temp":
+            temp_name = ""
+            if result.startswith("RECRUIT_TEMP_DONE:"):
+                temp_name = result.split(":", 1)[1].strip()
+            elif "复用现有临时工" in result:
+                # e.g. "复用现有临时工 '搜索助手'。"
+                m2 = re.search(r"'(.+?)'", result)
+                if m2:
+                    temp_name = m2.group(1).strip()
+            if temp_name:
+                # Force-load YAML into registry immediately (watchdog has latency)
+                temp_yaml = project_dir / "agents" / f"{temp_name}.yaml"
+                if _registry is not None and temp_yaml.exists():
+                    try:
+                        _registry._load_file(temp_yaml)  # noqa: SLF001
+                    except Exception:
+                        logger.exception("Failed to force-load temp agent YAML: %s", temp_name)
+                for r in _routers.values():
+                    r.register_temp_agent(temp_name)
+                task_content = str(args.get("task", "")).strip()
+                if task_content:
+                    asyncio.create_task(_run_temp_agent_task(
+                        thread_id=thread_id,
+                        caller_agent=caller_agent,
+                        temp_name=temp_name,
+                        task_content=task_content,
+                        project_dir=project_dir,
+                    ))
     return results
+
+
+async def _run_temp_agent_task(
+    thread_id: str,
+    caller_agent: str,
+    temp_name: str,
+    task_content: str,
+    project_dir: Path,
+) -> None:
+    """Dispatch the task to a freshly registered temp agent and process its tool calls."""
+    router = _get_router(thread_id)
+    async for event in router.dispatch(
+        sender=caller_agent,
+        to=[temp_name],
+        cc=[],
+        content=task_content,
+    ):
+        await _ws_broadcast(thread_id, event)
+        if event.get("type") == "agent_done":
+            content = event.get("envelope", {}).get("content", "")
+            tr = await _process_tool_calls(
+                content,
+                project_dir,
+                thread_id=thread_id,
+                caller_agent=temp_name,
+            )
+            if tr:
+                router.record_tool_feedback(temp_name, tr)
+                await _ws_broadcast(thread_id, {"type": "tool_results", "results": tr})
 
 
 async def _execute_tool(
