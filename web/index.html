@@ -1135,16 +1135,38 @@ function appendSysMsg(text) {
 }
 
 function appendToolResult(toolName, result, triggeredBy) {
-  // Truncate long results for display
-  const display = result.length > 120 ? result.slice(0, 120) + '…' : result;
   const card = document.createElement('div');
   card.className = 'act-card tool';
-  card.innerHTML = `
-    <span class="act-card-icon">🔧</span>
-    <div class="act-card-body">
+
+  let bodyHtml;
+  if (toolName === 'web_search' || toolName === 'web_read') {
+    const linkRe = /\[([^\]]*)\]\((https?:\/\/[^\)]+)\)/g;
+    const links = [];
+    let m;
+    while ((m = linkRe.exec(result)) !== null) {
+      links.push({ title: m[1], url: m[2] });
+    }
+    const linksHtml = links.length
+      ? `<div style="margin-top:4px;display:flex;flex-direction:column;gap:2px">${
+          links.slice(0, 8).map(l =>
+            `<a href="${escHtml(l.url)}" target="_blank" rel="noopener" style="font-size:11px;color:#60a5fa;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(l.url)}">↗ ${escHtml(l.title)}</a>`
+          ).join('')
+        }${links.length > 8 ? `<span style="font-size:10px;opacity:.6">…及 ${links.length - 8} 条</span>` : ''}</div>`
+      : '';
+    const firstLine = result.split('\n')[0] || '';
+    const display = firstLine.length > 120 ? firstLine.slice(0, 120) + '…' : firstLine;
+    bodyHtml = `
       <div class="act-card-title">${escHtml(toolName)}<span style="font-weight:400;margin-left:6px;opacity:.7">by ${escHtml(triggeredBy)}</span></div>
       <div class="act-card-sub">${escHtml(display)}</div>
-    </div>`;
+      ${linksHtml}`;
+  } else {
+    const display = result.length > 120 ? result.slice(0, 120) + '…' : result;
+    bodyHtml = `
+      <div class="act-card-title">${escHtml(toolName)}<span style="font-weight:400;margin-left:6px;opacity:.7">by ${escHtml(triggeredBy)}</span></div>
+      <div class="act-card-sub">${escHtml(display)}</div>`;
+  }
+
+  card.innerHTML = `<span class="act-card-icon">🔧</span><div class="act-card-body">${bodyHtml}</div>`;
   el('msgList').appendChild(card);
   scrollBottom();
 }
