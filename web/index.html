@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agent Platform</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -136,7 +137,23 @@
   .tag.cc { background: #1a2e23; color: #34d399; }
   .tag.auto { background: #2a1f40; color: var(--accent2); }
   .tag.temp-tag { background: #2a1840; color: var(--accent2); border: 1px solid var(--accent2); }
-  .bubble { padding: 9px 13px; border-radius: var(--radius); font-size: 14px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+  .bubble { padding: 9px 13px; border-radius: var(--radius); font-size: 14px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; position: relative; }
+  .bubble.md-mode { white-space: normal; }
+  .bubble.md-mode p { margin: 0 0 .5em; }
+  .bubble.md-mode p:last-child { margin-bottom: 0; }
+  .bubble.md-mode h1,.bubble.md-mode h2,.bubble.md-mode h3 { margin: .6em 0 .3em; font-weight: 600; }
+  .bubble.md-mode ul,.bubble.md-mode ol { padding-left: 1.4em; margin: .3em 0; }
+  .bubble.md-mode li { margin: .15em 0; }
+  .bubble.md-mode code { background: rgba(255,255,255,.1); border-radius: 3px; padding: 1px 5px; font-size: .88em; font-family: monospace; }
+  .bubble.md-mode pre { background: rgba(0,0,0,.3); border-radius: 6px; padding: 8px 10px; overflow-x: auto; margin: .4em 0; }
+  .bubble.md-mode pre code { background: none; padding: 0; }
+  .bubble.md-mode a { color: #60a5fa; text-decoration: underline; }
+  .bubble.md-mode strong { font-weight: 600; }
+  .bubble.md-mode blockquote { border-left: 3px solid var(--border); padding-left: 8px; opacity: .8; margin: .3em 0; }
+  .bubble.md-mode table { border-collapse: collapse; font-size: 13px; margin: .4em 0; }
+  .bubble.md-mode th,.bubble.md-mode td { border: 1px solid var(--border); padding: 3px 8px; }
+  .md-toggle-btn { position: absolute; bottom: 4px; right: 6px; background: rgba(255,255,255,.08); border: none; border-radius: 4px; color: var(--muted); font-size: 10px; padding: 1px 5px; cursor: pointer; opacity: 0; transition: opacity .15s; }
+  .bubble:hover .md-toggle-btn { opacity: 1; }
   .msg-wrap.user  .bubble { background: var(--user); color: #fff; border-bottom-right-radius: 3px; }
   .msg-wrap.agent .bubble { background: var(--surface2); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
   .msg-wrap.temp-agent .bubble { border-color: var(--accent2); background: #1a1230; }
@@ -571,6 +588,38 @@ function color(name) {
 }
 function escHtml(s) {
   return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderMd(text) {
+  if (typeof marked === 'undefined') return escHtml(text);
+  try {
+    return marked.parse(text || '', { breaks: true, gfm: true });
+  } catch(e) {
+    return escHtml(text);
+  }
+}
+
+function toggleMdBubble(btn) {
+  const bubble = btn.closest('.bubble');
+  if (!bubble) return;
+  const raw = bubble.getAttribute('data-raw') || '';
+  const isMd = bubble.classList.contains('md-mode');
+  if (isMd) {
+    bubble.classList.remove('md-mode');
+    // Remove all children except btn, replace with text node
+    Array.from(bubble.childNodes).forEach(n => { if (n !== btn) n.remove(); });
+    bubble.insertBefore(document.createTextNode(raw), btn);
+    btn.textContent = 'MD';
+    btn.title = '切换为 Markdown 渲染';
+  } else {
+    bubble.classList.add('md-mode');
+    Array.from(bubble.childNodes).forEach(n => { if (n !== btn) n.remove(); });
+    const tmp = document.createElement('span');
+    tmp.innerHTML = renderMd(raw);
+    bubble.insertBefore(tmp, btn);
+    btn.textContent = 'TXT';
+    btn.title = '切换为纯文本';
+  }
 }
 function showToast(msg, ms=2500) {
   const t = el('toast'); t.textContent = msg; t.classList.add('show');
@@ -1283,7 +1332,7 @@ function appendMessage(env) {
       <span>${(env.timestamp||'').slice(11,19)}</span>
     </div>
     ${toolCallsHtml}
-    ${hasMainBubble ? `<div class="bubble">${escHtml(cleaned)}${imgsHtml}</div>` : ''}
+    ${hasMainBubble ? `<div class="bubble md-mode" data-raw="${escHtml(cleaned)}">${renderMd(cleaned)}${imgsHtml}<button class="md-toggle-btn" onclick="toggleMdBubble(this)" title="切换显示模式">MD</button></div>` : ''}
     ${pinBtn}`;
   el('msgList').appendChild(wrap);
   scrollBottom();
