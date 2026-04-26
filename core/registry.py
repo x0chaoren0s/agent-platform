@@ -33,6 +33,7 @@ from agent_framework._types import Content
 from .capability_table import CapabilityTable
 from .llm import build_client
 from .memory import SQLiteHistoryProvider
+from .member_protocol import compose_member_instructions
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,12 @@ def _build_agent(
     agent_id: str = cfg["name"]
     instructions: str = cfg.get("instructions", "You are a helpful assistant.")
     max_history: int = cfg.get("max_history", 80)
+    role: str = cfg.get("role", "member")
+    is_temp: bool = cfg.get("is_temp", False)
+    effective_instructions = instructions
+    if role == "member" and not is_temp:
+        effective_instructions = compose_member_instructions(instructions)
+    cfg["_effective_instructions"] = effective_instructions
 
     memory_provider = SQLiteHistoryProvider(
         db_path=db_path,
@@ -113,7 +120,6 @@ def _build_agent(
     # Layer 4: project context injection rules
     # - Disabled for temp agents (their instructions already contain the task)
     # - Can be explicitly overridden via YAML field `project_context: false/true`
-    is_temp: bool = cfg.get("is_temp", False)
     explicit_ctx: bool | None = cfg.get("project_context", None)
     inject_context = (
         context_path is not None
@@ -124,7 +130,7 @@ def _build_agent(
 
     return Agent(
         name=agent_id,
-        instructions=instructions,
+        instructions=effective_instructions,
         client=build_client(),
         context_providers=context_providers,
     )

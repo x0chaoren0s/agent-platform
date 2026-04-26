@@ -125,8 +125,17 @@ async def assign_task(
     store = await _get_task_store(project_dir)
     deps = depends_on or []
     for dep in deps:
+        dep_str = str(dep)
+        if not dep_str.startswith("task-"):
+            return (
+                f"错误：depends_on 必须填写 task-id（形如 task-0001），"
+                f"不能填写成员名或其它字符串：{dep_str}。"
+            )
         if await store.get(dep) is None:
-            return f"错误：依赖任务不存在：{dep}"
+            return (
+                f"错误：依赖任务不存在：{dep}。"
+                "请先调用 list_tasks(scope='all') 确认上游任务 id。"
+            )
     task = Task(
         id="",
         project=_project_name(pdir),
@@ -143,6 +152,10 @@ async def assign_task(
     )
     created = await store.create(task)
     await _emit(thread_id, {"type": "task_event", "event": "created", "task": created.__dict__})
+    if created.status == "ready":
+        router = _ROUTERS.get(thread_id)
+        if router is not None and hasattr(router, "notify_assignee"):
+            await router.notify_assignee(created.__dict__)
     return f"已派发任务 {created.id} 给 {assignee}"
 
 

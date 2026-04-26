@@ -64,6 +64,7 @@ from core.heartbeat import HeartbeatScheduler
 from core.red_actions import RED_ACTIONS, check_confirm
 from core.question_store import QuestionStore
 from core.task_store import TaskStore
+from core.member_protocol import get_tools_for_role
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("agent-platform")
@@ -288,6 +289,7 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
       【任务派发协议】（必读）
       - 当用户请求复杂任务时，必须使用 assign_task 派发，不要只口头通知。
       - 有依赖关系时使用 depends_on；上游 submit_deliverable 后，下游会自动唤醒。
+      - depends_on 只能填写已存在的 task-id（形如 task-0001），不能填写成员名。
       - 成员能力不足时，先 recruit_fixed 再 assign_task。
       - 收到 give_up/失败通知后，评估重派、拆解或请用户决策。
 
@@ -301,6 +303,9 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
       【新增工具示例】（必须按此格式调用）
       ```tool_call
       {"tool": "assign_task", "args": {"assignee": "调研员", "title": "完成星火万物 AIGC 岗位调研", "brief": "聚焦公司背景、产研流程、面试真题", "deadline": "2026-04-26 12:00", "deliverable_kind": "markdown"}}
+      ```
+      ```tool_call
+      {"tool": "assign_task", "args": {"assignee": "面试教练", "title": "基于调研产出面试要点", "brief": "结合上游调研写 5 条核心要点", "depends_on": ["task-0001"], "deliverable_kind": "markdown"}}
       ```
       ```tool_call
       {"tool": "list_tasks", "args": {"scope": "all"}}
@@ -486,6 +491,26 @@ async def _ws_broadcast(thread_id: str, event: dict[str, Any]) -> None:
 @app.get("/api/agents")
 def list_agents():
     return {"project": _current_project, "agents": _registry.list_info()}
+
+
+@app.get("/api/agents/{name}/effective_prompt")
+def get_agent_effective_prompt(name: str):
+    cfg = _registry.get_config(name)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail=f"agent '{name}' not found")
+    role = cfg.get("role", "member")
+    is_temp = cfg.get("is_temp", False)
+    return {
+        "name": name,
+        "role": role,
+        "is_temp": is_temp,
+        "raw_instructions": cfg.get("instructions", ""),
+        "effective_instructions": cfg.get(
+            "_effective_instructions",
+            cfg.get("instructions", ""),
+        ),
+        "available_tools": get_tools_for_role(role, is_temp),
+    }
 
 
 class CreateAgentRequest(BaseModel):
