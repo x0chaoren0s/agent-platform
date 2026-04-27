@@ -57,17 +57,11 @@ from core.checkpoint_store import CheckpointStore
 from core import knowledge_base as kb_mod
 from core import skill_store
 from core import summarizer as summarizer_mod
-from core import team_tools
-from core import web_tools
-from core.platform_tools import (
-    list_team,
-    recruit_fixed,
-    dismiss_member,
-    recruit_temp,
-    update_project_context,
-)
+from core import tool_registry
+from core.tools.categories.platform_runtime import dismiss_member, recruit_fixed
+from core.tools.categories import team_runtime
 from core.heartbeat import HeartbeatScheduler
-from core.red_actions import RED_ACTIONS, check_confirm
+from core.red_actions import check_confirm
 from core.question_store import QuestionStore
 from core.task_store import TaskStore
 from core.member_protocol import get_tools_for_role
@@ -109,11 +103,12 @@ def _activate(name: str) -> None:
     _task_stores.clear()
     _question_stores.clear()
     _registry = AgentRegistry(pdir)
+    tool_registry.startup_consistency_check()
     _session_store = SessionStore(pdir / "sessions")
     _conv_store = ConversationStore(pdir / "memory" / "platform.db")
     _checkpoint_store = CheckpointStore(pdir / "memory" / "platform.db", pdir)
     _registry.start_watching()
-    team_tools.set_broadcaster(_ws_broadcast)
+    team_runtime.set_broadcaster(_ws_broadcast)
     _current_project = name
     logger.info("Activated project '%s'  agents=%s", name, list(_registry.all().keys()))
 
@@ -130,7 +125,7 @@ def _get_router(thread_id: str) -> MessageRouter:
             broadcaster=_ws_broadcast,
             tool_executor=_agent_tool_executor,
         )
-        team_tools.set_router(thread_id, _routers[thread_id], project_dir=str(pdir))
+        team_runtime.set_router(thread_id, _routers[thread_id], project_dir=str(pdir))
     return _routers[thread_id]
 
 
@@ -258,7 +253,7 @@ async def lifespan(app: FastAPI):
             advisory_min_gap_seconds=30,
             conversation_store=_conv_store,
             thread_ids_provider=lambda: list(_routers.keys()),
-            project_dir_provider=team_tools.get_project_dir,
+            project_dir_provider=team_runtime.get_project_dir,
             router_provider=lambda tid: _routers.get(tid),
             task_store_provider=_get_task_store_by_project_dir,
             broadcaster=_ws_broadcast,
@@ -1072,8 +1067,11 @@ async def _execute_tool(
     thread_id: str,
     caller_agent: str,
 ) -> str:
-    pdir_str = str(project_dir)
-    if tool_name in RED_ACTIONS:
+    spec = tool_registry.get_tool_spec(tool_name)
+    if spec is None:
+        return f"未知工具：{tool_name}"
+
+    if spec.is_red:
         qstore = await _get_question_store(thread_id)
         allowed, reason = await check_confirm(
             qstore,
@@ -1084,10 +1082,35 @@ async def _execute_tool(
         )
         if not allowed:
             return reason
-    if tool_name == "list_team":
-        return list_team(pdir_str)
-    elif tool_name == "recruit_fixed":
-        result = recruit_fixed(project_dir=pdir_str, **args)
+
+    ctx = tool_registry.ToolExecContext(
+        project_dir=project_dir,
+        thread_id=thread_id,
+        caller_agent=caller_agent,
+    )
+    try:
+        result = await tool_registry.execute_tool(tool_name, args, ctx)
+    except TypeError as exc:
+        if tool_name in {"web_search", "web_read"}:
+            return f"工具调用参数错误（{tool_name}）：{exc}"
+        if tool_name in team_runtime.TEAM_TOOL_DISPATCH:
+            return (
+                f"工具调用参数错误（{tool_name}）：{exc}。请检查必填字段并重试。\n"
+                "建议立即调用 list_tasks(scope='mine') 查看当前任务实际状态，避免基于错误假设继续推进。"
+            )
+        return f"工具调用参数错误（{tool_name}）：{exc}"
+    except Exception as exc:
+        if tool_name in {"web_search", "web_read"}:
+            logger.exception("%s execution error", tool_name)
+            return f"工具调用异常（{tool_name}）：{exc}"
+        if tool_name in team_runtime.TEAM_TOOL_DISPATCH:
+            return (
+                f"工具调用异常（{tool_name}）：{exc}\n"
+                "建议立即调用 list_tasks(scope='mine') 查看当前任务实际状态，避免基于错误假设继续推进。"
+            )
+        return f"工具调用异常（{tool_name}）：{exc}"
+
+    if tool_name == "recruit_fixed":
         if not result.startswith("错误："):
             _sync_registry_after_member_change(
                 project_dir=project_dir,
@@ -1096,7 +1119,6 @@ async def _execute_tool(
             )
         return result
     elif tool_name == "dismiss_member":
-        result = dismiss_member(project_dir=pdir_str, **args)
         if not result.startswith("错误："):
             dismissed_name = str(args.get("name", ""))
             _sync_registry_after_member_change(
@@ -1136,65 +1158,14 @@ async def _execute_tool(
                 except Exception:
                     logger.exception("Failed to auto-reassign tasks after dismiss")
         return result
-    elif tool_name == "recruit_temp":
-        return recruit_temp(project_dir=pdir_str, **args)
     elif tool_name == "update_project_context":
-        result = update_project_context(project_dir=pdir_str, **args)
         # Broadcast context update to all active connections
         asyncio.create_task(_broadcast_to_project({
             "type": "context_updated",
             "project": _current_project,
         }))
         return result
-    elif tool_name == "kb_write":
-        return await kb_mod.kb_write(project_dir=project_dir, **args)
-    elif tool_name == "kb_search":
-        return await kb_mod.kb_search(project_dir=project_dir, **args)
-    elif tool_name == "web_search":
-        try:
-            return await web_tools.web_search(
-                thread_id=thread_id,
-                caller_agent=caller_agent,
-                **args,
-            )
-        except TypeError as exc:
-            return f"工具调用参数错误（web_search）：{exc}"
-        except Exception as exc:
-            logger.exception("web_search execution error")
-            return f"工具调用异常（web_search）：{exc}"
-    elif tool_name == "web_read":
-        try:
-            return await web_tools.web_read(
-                thread_id=thread_id,
-                caller_agent=caller_agent,
-                **args,
-            )
-        except TypeError as exc:
-            return f"工具调用参数错误（web_read）：{exc}"
-        except Exception as exc:
-            logger.exception("web_read execution error")
-            return f"工具调用异常（web_read）：{exc}"
-    elif tool_name in team_tools.TEAM_TOOL_DISPATCH:
-        fn = team_tools.TEAM_TOOL_DISPATCH[tool_name]
-        try:
-            return await fn(
-                project_dir=pdir_str,
-                thread_id=thread_id,
-                caller_agent=caller_agent,
-                **args,
-            )
-        except TypeError as exc:
-            return (
-                f"工具调用参数错误（{tool_name}）：{exc}。请检查必填字段并重试。\n"
-                "建议立即调用 list_tasks(scope='mine') 查看当前任务实际状态，避免基于错误假设继续推进。"
-            )
-        except Exception as exc:
-            return (
-                f"工具调用异常（{tool_name}）：{exc}\n"
-                "建议立即调用 list_tasks(scope='mine') 查看当前任务实际状态，避免基于错误假设继续推进。"
-            )
-    else:
-        return f"未知工具：{tool_name}"
+    return result
 
 
 # ---------------------------------------------------------------------------

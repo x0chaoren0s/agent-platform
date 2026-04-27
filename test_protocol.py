@@ -110,7 +110,7 @@ sep("5. depends_on 填成员名 → 期望服务器报错（直接调 assign_tas
 import asyncio, sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from core.team_tools import assign_task, _get_task_store, set_router, set_broadcaster
+from core.tools.categories.team_runtime import assign_task, _get_task_store, set_router, set_broadcaster
 from pathlib import Path
 
 PDIR = str(Path(__file__).parent / "projects" / "proto-test-0426")
