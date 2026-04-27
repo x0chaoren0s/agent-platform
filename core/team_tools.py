@@ -1,12 +1,13 @@
 """Team collaboration tools for MVP-Plus tasking and communication."""
 
 from __future__ import annotations
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import yaml
 
-from . import web_tools
+from . import skill_store, web_tools
 from .question_store import QuestionStore, UserQuestion
 from .task_store import Task, TaskStore
 
@@ -220,16 +221,15 @@ async def submit_deliverable(
     references: list[str] | None = None,
     **kwargs: Any,
 ) -> str:
-    if not task_id or not str(task_id).strip():
-        return "错误：submit_deliverable 必须包含 task_id 字段，请检查 args。"
     if not summary or not str(summary).strip():
         return "错误：submit_deliverable 必须包含 summary 字段，请检查 args。"
     _ = thread_id
     store = await _get_task_store(project_dir)
-    task = await store.get(task_id)
-    if task is None:
+    has_task_id = bool(task_id and str(task_id).strip())
+    task = await store.get(task_id) if has_task_id else None
+    if has_task_id and task is None:
         return f"错误：任务不存在：{task_id}"
-    if caller_agent != task.assignee:
+    if task is not None and caller_agent != task.assignee:
         return f"错误：仅 assignee 可交付，当前调用者={caller_agent}"
     if bool(content) == bool(file_path):
         return "错误：content 与 file_path 必须二选一"
@@ -293,11 +293,21 @@ async def submit_deliverable(
     deliverable_path = file_path
     if content is not None:
         full_content = content + refs_section
-        safe_title = "".join(c if c.isalnum() else "-" for c in task.title.lower()).strip("-")
-        safe_title = safe_title or "deliverable"
-        rel_path = f"{task_id}-{safe_title[:32]}.md"
+        if task is not None:
+            safe_title = "".join(c if c.isalnum() else "-" for c in task.title.lower()).strip("-")
+            safe_title = safe_title or "deliverable"
+            rel_path = f"{task_id}-{safe_title[:32]}.md"
+        else:
+            safe_agent = "".join(c if c.isalnum() else "-" for c in caller_agent.lower()).strip("-")
+            safe_agent = safe_agent or "agent"
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            rel_path = f"adhoc-deliverable-{safe_agent}-{ts}.md"
         deliverable_path = store.write_deliverable_file(rel_path, full_content)
     assert deliverable_path is not None
+    if task is None:
+        refs_hint = f"，引用 {len(ref_lines)} 条" if ref_lines else ""
+        return f"已提交无任务交付：workspace/{deliverable_path}{refs_hint}"
+
     updated = await store.submit_deliverable(
         task_id,
         path=deliverable_path,
@@ -377,6 +387,8 @@ async def send_message(
 ) -> str:
     to_list = _as_list(to)
     cc_list = _as_list(cc)
+    if "user" in [name.lower() for name in to_list]:
+        return "错误：不能通过 send_message 向用户发送消息，请改用 ask_user 工具与用户沟通。"
     clean_to = sorted({name for name in to_list if name and name != caller_agent})
     if not clean_to:
         return "错误：to 不能为空"
@@ -488,6 +500,17 @@ async def give_up(
     return f"已放弃任务 {task_id}，并通知 {orchestrator}"
 
 
+async def load_skill(
+    project_dir: str,
+    thread_id: str,
+    caller_agent: str,
+    *,
+    name: str,
+) -> str:
+    _ = thread_id
+    return skill_store.load_for_agent(project_dir=project_dir, agent_name=caller_agent, skill_name=name)
+
+
 TEAM_TOOL_DISPATCH: dict[str, Callable[..., Awaitable[str]]] = {
     "assign_task": assign_task,
     "update_task": update_task,
@@ -496,5 +519,6 @@ TEAM_TOOL_DISPATCH: dict[str, Callable[..., Awaitable[str]]] = {
     "send_message": send_message,
     "ask_user": ask_user,
     "give_up": give_up,
+    "load_skill": load_skill,
 }
 

@@ -35,9 +35,10 @@ from typing import Any
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 import json_repair
 from pydantic import BaseModel
+import yaml
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -54,6 +55,7 @@ from core.session_store import SessionStore
 from core.conversation_store import ConversationStore
 from core.checkpoint_store import CheckpointStore
 from core import knowledge_base as kb_mod
+from core import skill_store
 from core import summarizer as summarizer_mod
 from core import team_tools
 from core import web_tools
@@ -567,6 +569,7 @@ def get_agent_effective_prompt(name: str):
         "name": name,
         "role": role,
         "is_temp": is_temp,
+        "skills": cfg.get("skills", []),
         "raw_instructions": cfg.get("instructions", ""),
         "effective_instructions": cfg.get(
             "_effective_instructions",
@@ -583,6 +586,10 @@ class CreateAgentRequest(BaseModel):
     capabilities: list[str] = []
     instructions: str = "你是一个专业的助手，请尽力完成分配给你的任务。"
     max_history: int = 80
+
+
+class UpdateAgentSkillsRequest(BaseModel):
+    skills: list[str] = []
 
 
 @app.post("/api/agents")
@@ -605,6 +612,79 @@ def create_agent(req: CreateAgentRequest):
         name=req.name,
     )
     return {"ok": True, "message": result, "agents": _registry.list_info()}
+
+
+@app.get("/api/skills")
+def list_skills():
+    """List all skills in active project."""
+    pdir = _project_dir(_current_project)
+    skills_dir = pdir / "skills"
+    if not skills_dir.exists():
+        return {"project": _current_project, "skills": []}
+
+    skills: list[dict[str, str]] = []
+    for skill_file in sorted(skills_dir.glob("*/SKILL.md")):
+        skill_id = skill_file.parent.name
+        parsed = skill_store.read_skill(str(pdir), skill_id)
+        if parsed is None:
+            skills.append({"id": skill_id, "name": skill_id, "description": ""})
+            continue
+        frontmatter, _ = parsed
+        skills.append(
+            {
+                "id": skill_id,
+                "name": str(frontmatter.get("name", "")).strip() or skill_id,
+                "description": str(frontmatter.get("description", "")).strip(),
+            }
+        )
+    return {"project": _current_project, "skills": skills}
+
+
+@app.put("/api/agents/{name}/skills")
+def update_agent_skills(name: str, req: UpdateAgentSkillsRequest):
+    """Hot-plug skills for an existing agent by updating its YAML."""
+    pdir = _project_dir(_current_project)
+    safe_name = _normalize_agent_filename(name)
+    yaml_path = pdir / "agents" / f"{safe_name}.yaml"
+    if not yaml_path.exists():
+        raise HTTPException(status_code=404, detail=f"agent '{name}' not found")
+
+    cfg = _registry.get_config(name) if _registry is not None else None
+    if cfg is None and _registry is not None:
+        cfg = _registry.get_config(safe_name)
+    if cfg is not None and cfg.get("role") == "orchestrator":
+        raise HTTPException(status_code=400, detail="不允许修改 orchestrator skills")
+
+    clean_skills = sorted({str(item).strip() for item in req.skills if str(item).strip()})
+    available = {item["id"] for item in list_skills().get("skills", [])}
+    missing = [skill for skill in clean_skills if skill not in available]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"未知 skill: {', '.join(missing)}")
+
+    try:
+        raw_cfg = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(raw_cfg, dict):
+            raise HTTPException(status_code=400, detail=f"配置文件格式错误: {yaml_path.name}")
+        raw_cfg["skills"] = clean_skills
+        with yaml_path.open("w", encoding="utf-8") as f:
+            yaml.dump(raw_cfg, f, allow_unicode=True, sort_keys=False)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"更新失败: {exc}") from exc
+
+    if _registry is not None:
+        try:
+            _registry._load_file(yaml_path)  # noqa: SLF001 - immediate reload
+        except Exception:
+            logger.exception("Failed to hot-reload agent after skills update: %s", safe_name)
+
+    return {
+        "ok": True,
+        "message": f"已更新 {safe_name} 的 skills",
+        "name": safe_name,
+        "skills": clean_skills,
+    }
 
 
 @app.delete("/api/agents/{name}")
@@ -1345,7 +1425,13 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
 
             _touched_this_turn = False
             async for event in router.dispatch(sender=sender, to=to, cc=cc, content=content, images=images):
-                await websocket.send_text(json.dumps(event, ensure_ascii=False))
+                try:
+                    await websocket.send_text(json.dumps(event, ensure_ascii=False))
+                except RuntimeError as send_err:
+                    if "close message has been sent" in str(send_err):
+                        logger.info("WebSocket already closing thread_id=%s", thread_id)
+                        break
+                    raise
 
                 # Update last_active once per user turn (on first envelope recorded)
                 if not _touched_this_turn and event.get("type") == "envelope_recorded":
@@ -1367,10 +1453,16 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
                     tool_names = {item.get("tool", "") for item in results}
                     if {"recruit_fixed", "dismiss_member"} & tool_names:
                         await asyncio.sleep(0.35)
-                        await websocket.send_text(json.dumps({
-                            "type": "agents_updated",
-                            "agents": _registry.list_info(),
-                        }, ensure_ascii=False))
+                        try:
+                            await websocket.send_text(json.dumps({
+                                "type": "agents_updated",
+                                "agents": _registry.list_info(),
+                            }, ensure_ascii=False))
+                        except RuntimeError as send_err:
+                            if "close message has been sent" in str(send_err):
+                                logger.info("WebSocket already closing thread_id=%s", thread_id)
+                                break
+                            raise
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected thread_id=%s", thread_id)
@@ -1378,6 +1470,11 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
         # Fire-and-forget: rolling summary + memory consolidation
         asyncio.create_task(_on_conversation_disconnect(router, pdir))
     except Exception as exc:
+        if isinstance(exc, RuntimeError) and "close message has been sent" in str(exc):
+            logger.info("WebSocket closed during send thread_id=%s", thread_id)
+            _active_websockets.pop(thread_id, None)
+            asyncio.create_task(_on_conversation_disconnect(router, pdir))
+            return
         logger.exception("WebSocket error thread_id=%s", thread_id)
         _active_websockets.pop(thread_id, None)
         try:
@@ -1405,6 +1502,13 @@ async def _on_conversation_disconnect(router: MessageRouter, pdir: Path) -> None
                     "type": "context_updated",
                     "project": _current_project,
                 })
+        notice = summarizer_mod.pop_last_notice()
+        if notice:
+            await _broadcast_to_project({
+                "type": "error",
+                "agent": "platform",
+                "message": notice,
+            })
     except Exception:
         logger.exception("_on_conversation_disconnect background task failed")
 
@@ -1416,6 +1520,12 @@ async def _on_conversation_disconnect(router: MessageRouter, pdir: Path) -> None
 @app.get("/")
 def serve_ui():
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/.well-known/appspecific/com.chrome.devtools.json")
+def chrome_devtools_probe():
+    # Chrome/DevTools may probe this path; return empty response to avoid noisy 404 logs.
+    return Response(status_code=204)
 
 
 if __name__ == "__main__":

@@ -121,9 +121,19 @@ class TaskStore:
     async def create(self, task: Task) -> Task:
         now = datetime.now().isoformat(timespec="seconds")
         task_id = await self._next_task_id(task.thread_id)
-        status = "ready" if not task.depends_on else "pending"
+        dep_list = [str(dep).strip() for dep in task.depends_on if str(dep).strip()]
+        status = "ready"
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute("PRAGMA foreign_keys=ON")
+            if dep_list:
+                placeholders = ",".join(["?"] * len(dep_list))
+                async with db.execute(
+                    f"SELECT COUNT(1) AS done_count FROM tasks WHERE id IN ({placeholders}) AND status = 'done'",
+                    tuple(dep_list),
+                ) as cur:
+                    row = await cur.fetchone()
+                done_count = int(row[0]) if row else 0
+                status = "ready" if done_count == len(dep_list) else "pending"
             await db.execute(
                 """
                 INSERT INTO tasks (
@@ -153,7 +163,7 @@ class TaskStore:
                     None,
                 ),
             )
-            for dep in task.depends_on:
+            for dep in dep_list:
                 await db.execute(
                     "INSERT OR IGNORE INTO task_dependencies(task_id, depends_on) VALUES (?, ?)",
                     (task_id, dep),

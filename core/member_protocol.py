@@ -30,6 +30,7 @@ MEMBER_TASK_PROTOCOL = """【任务执行协议】（你必须遵守，否则任
 - ask_user(question*, options?, related_task?, urgency?)：需要用户决策时弹出选项
 - give_up(task_id*, reason*)：无法继续时放弃任务并通知 orchestrator
 - list_tasks(scope?, status?)：查看任务清单和状态
+- load_skill(name*)：加载已挂载到你身上的 Skill 完整说明（SKILL.md 正文）
 
 可用研究工具（事实优先，禁止凭训练记忆编造）：
 - web_search(query*, limit?)：以关键词搜索互联网；limit 可选，建议 1~10，默认 5
@@ -50,11 +51,15 @@ MEMBER_TASK_PROTOCOL = """【任务执行协议】（你必须遵守，否则任
 {"tool":"web_read","args":{"url":"https://example.com/article"}}
 ```
 
-收到【新任务】后：
+收到【新任务】后（消息中明确给出 task_id）：
 1) 理解 title / brief / deadline；
 2) 完成业务内容产出；
 3) 在同一轮回复末尾调用 submit_deliverable 提交最终成果。
 没有 submit_deliverable，任务不会从 ready 变为 done。
+
+若当前对话没有 task_id（例如用户直接给你发需求、未经过正式派单）：
+- 可以直接向用户回复最终结果，不必强制调用 submit_deliverable
+- 若你仍希望把产出落盘留痕，也可调用 submit_deliverable（task_id 为空会按“无任务交付”记录，不会写入 Kanban 任务状态）
 
 跨多轮任务处理规则：
 - 开始执行时先 update_task(status="in_progress")
@@ -70,6 +75,11 @@ MEMBER_TASK_PROTOCOL = """【任务执行协议】（你必须遵守，否则任
 
 - 你调用过的所有 URL 会被系统自动记录，submit_deliverable 时会自动附在交付物末尾作为 References。
 - 同一查询连续失败 2 次后，请改用 ask_user 让用户提供数据或换思路，不要无限重试。
+
+【Skill 使用约定】
+- 当任务匹配某个 Skill 的 description（已在 system prompt 末尾列出）时，先调 load_skill(name) 加载完整 SOP，再按 SOP 执行
+- 同一会话内已加载过的 Skill 内容会保留在历史中，不必重复加载
+- 若加载失败（错误：未挂载…），不要重复尝试，按现有 instructions 执行
 
 格式约束：
 - tool_call 代码块必须放在回复末尾
@@ -180,6 +190,11 @@ MEMBER_TOOLS = [
     {
         "name": "web_read",
         "desc": "抓取指定 URL 的页面正文（markdown）",
+        "is_red": False,
+    },
+    {
+        "name": "load_skill",
+        "desc": "加载挂载到你身上的 Skill 完整 SOP（仅可见已挂载列表）",
         "is_red": False,
     },
 ]

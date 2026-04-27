@@ -38,6 +38,7 @@ from .member_protocol import (
     compose_member_instructions,
     compose_temp_instructions,
 )
+from .skill_store import build_skill_index
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,7 @@ def _build_agent(
     cfg: dict[str, Any],
     db_path: Path,
     context_path: Path | None = None,
+    project_dir: Path | None = None,
 ) -> Agent:
     """Instantiate a MAF Agent from a YAML config dict."""
     agent_id: str = cfg["name"]
@@ -115,6 +117,18 @@ def _build_agent(
             effective_instructions = compose_temp_instructions(instructions)
         else:
             effective_instructions = compose_member_instructions(instructions)
+            if project_dir is not None:
+                raw_skills = cfg.get("skills", [])
+                agent_skills = (
+                    [str(item).strip() for item in raw_skills if str(item).strip()]
+                    if isinstance(raw_skills, list)
+                    else []
+                )
+                skill_index = build_skill_index(project_dir, agent_skills)
+                if skill_index:
+                    effective_instructions = (
+                        f"{effective_instructions}\n\n{skill_index}"
+                    )
     else:
         # Orchestrator and other roles should also inherit global behavior guardrails.
         effective_instructions = compose_base_instructions(instructions)
@@ -251,7 +265,12 @@ class AgentRegistry:
                 logger.warning("Agent YAML missing 'name' field: %s", path)
                 return
             cfg["_source"] = path.stem
-            agent = _build_agent(cfg, self._db_path, self._context_path)
+            agent = _build_agent(
+                cfg,
+                self._db_path,
+                self._context_path,
+                project_dir=self._project_dir,
+            )
             with self._lock:
                 self._agents[cfg["name"]] = agent
                 self._configs[cfg["name"]] = cfg

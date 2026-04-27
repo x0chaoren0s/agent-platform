@@ -15,6 +15,19 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
+_LAST_NOTICE: str = ""
+
+
+def _set_last_notice(msg: str) -> None:
+    global _LAST_NOTICE
+    _LAST_NOTICE = msg
+
+
+def pop_last_notice() -> str:
+    global _LAST_NOTICE
+    msg = _LAST_NOTICE
+    _LAST_NOTICE = ""
+    return msg
 
 _SUMMARIZE_SYSTEM = """\
 你是一个专业的对话分析助手。请对提供的对话历史进行精炼压缩，提取关键信息。
@@ -84,7 +97,12 @@ async def summarize_envelopes(envelopes: list[dict]) -> str:
             max_tokens=600,
         )
         return resp.choices[0].message.content or ""
-    except Exception:
+    except Exception as exc:
+        err_text = str(exc).lower()
+        if "insufficient balance" in err_text or "error code: 402" in err_text:
+            logger.warning("summarize_envelopes skipped: model balance insufficient")
+            _set_last_notice("摘要模型余额不足，已跳过对话压缩/背景沉淀。")
+            return ""
         logger.exception("summarize_envelopes failed")
         return ""
 
@@ -126,6 +144,11 @@ async def consolidate_to_context(
 
         logger.info("Consolidated conversation summary to %s", context_path)
         return summary
-    except Exception:
+    except Exception as exc:
+        err_text = str(exc).lower()
+        if "insufficient balance" in err_text or "error code: 402" in err_text:
+            logger.warning("consolidate_to_context skipped: model balance insufficient")
+            _set_last_notice("摘要模型余额不足，已跳过对话压缩/背景沉淀。")
+            return ""
         logger.exception("consolidate_to_context failed")
         return ""

@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +43,7 @@ TAG_TEMP = "temp"
 _OUTGOING_COMM_TOOLS: frozenset[str] = frozenset(
     {"submit_deliverable", "send_message", "assign_task"}
 )
+_MENTION_RE = re.compile(r"@([\w\-\u4e00-\u9fff]+)")
 
 
 @dataclass
@@ -185,6 +187,22 @@ class MessageRouter:
         self._msg_counter += 1
         return f"msg-{self._msg_counter:04d}"
 
+    def _extract_mentions(self, content: str) -> list[str]:
+        if not content:
+            return []
+        seen: set[str] = set()
+        mentions: list[str] = []
+        for name in _MENTION_RE.findall(content):
+            cleaned = str(name).strip()
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            mentions.append(cleaned)
+        return mentions
+
     def _inbox_for(self, agent_name: str) -> list[Envelope]:
         """Filter global log to only messages this agent should see, capped at max_inbox_messages."""
         full = [
@@ -308,6 +326,28 @@ class MessageRouter:
             orchestrator = self._registry.get_orchestrator_name()
             if orchestrator and orchestrator != sender and orchestrator not in dedup_cc:
                 dedup_cc.append(orchestrator)
+        # Lint: if message text mentions @name but recipients do not include name.
+        # This is advisory-only and does not block delivery.
+        if sender not in {"user", "platform"}:
+            recipient_lc = {n.lower() for n in dedup_to + dedup_cc}
+            missing_mentions = [
+                name for name in self._extract_mentions(content)
+                if name.lower() not in recipient_lc
+            ]
+            if missing_mentions:
+                advisory_text = (
+                    "【系统提醒】检测到你在消息中提及了 "
+                    + ", ".join(f"@{name}" for name in missing_mentions)
+                    + "，但当前 to/cc 未包含这些成员。请确认是否发错对象。"
+                )
+                self.record_system_advisory(
+                    to_agent=sender,
+                    text=advisory_text,
+                    metadata={
+                        "mention_lint": True,
+                        "missing_mentions": missing_mentions,
+                    },
+                )
         broadcaster = self._broadcaster
         thread_id = self._thread_id
 
@@ -432,6 +472,7 @@ class MessageRouter:
         tools_called = False
         has_outgoing_comm = False
         advisory_sent = False
+        handoff_gap_rounds = 0
 
         while True:
             run_input = self._build_run_input(agent_name, current_envelope)
@@ -490,8 +531,14 @@ class MessageRouter:
                     tool_results = []
                 if tool_results:
                     tools_called = True
-                    if any((item.get("tool") or "") in _OUTGOING_COMM_TOOLS for item in tool_results):
+                    outgoing_this_round = any(
+                        (item.get("tool") or "") in _OUTGOING_COMM_TOOLS for item in tool_results
+                    )
+                    if outgoing_this_round:
                         has_outgoing_comm = True
+                        handoff_gap_rounds = 0
+                    else:
+                        handoff_gap_rounds += 1
                     formatted_results = [
                         {
                             "tool": item.get("tool", ""),
@@ -554,9 +601,15 @@ class MessageRouter:
                             _depth=depth + 1,
                         ):
                             yield esc_event
-            if not should_continue and tools_called and not has_outgoing_comm and not advisory_sent:
+            if (
+                not should_continue
+                and tools_called
+                and not has_outgoing_comm
+                and not advisory_sent
+                and handoff_gap_rounds >= 2
+            ):
                 advisory_text = (
-                    "【系统提醒】你已获取工具执行结果，但尚未将结果传达给其他成员。"
+                    "【系统提醒｜非用户反馈】你已获取工具执行结果，但尚未将结果传达给其他成员。"
                     "请使用 send_message、assign_task 或 submit_deliverable 将结果整理后发送给下游成员，避免信息断层。"
                 )
                 advisory_env = self.record_system_advisory(
@@ -606,13 +659,21 @@ class MessageRouter:
             return None
         lines = [f"【{tr['tool']}】{tr['result']}" for tr in tool_results]
         content = "【工具执行结果】\n" + "\n".join(lines)
+        structured = [
+            {
+                "tool": str(tr.get("tool", "")),
+                "result": str(tr.get("result", "")),
+                "triggered_by": triggered_by,
+            }
+            for tr in tool_results
+        ]
         envelope = Envelope(
             id=self._next_id(),
             sender="platform",
             to=[triggered_by],
             cc=[],
             content=content,
-            metadata={"tool_feedback": True},
+            metadata={"tool_feedback": True, "tool_results": structured},
         )
         self._global_log.append(envelope)
         self._flush_log()
