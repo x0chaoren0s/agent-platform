@@ -124,7 +124,7 @@
   .modal-btns button:active { opacity: .75; }
 
   /* ── Message area ── */
-  .msg-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .msg-area { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
   .msg-list { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; -webkit-overflow-scrolling: touch; }
   .msg-wrap { display: flex; flex-direction: column; max-width: 90%; }
   .msg-wrap.user  { align-self: flex-end;  align-items: flex-end; }
@@ -276,13 +276,22 @@
   /* ── Activity log (tool calls / escalations during stream) ── */
   .stream-activity { display: flex; flex-direction: column; gap: 3px; margin: 4px 0 2px; }
   .act-card { display: flex; align-items: flex-start; gap: 7px; padding: 5px 9px; border-radius: 7px; font-size: 11px; line-height: 1.5; }
-  .act-card.tool  { background: #0d1f12; border: 1px solid #1d3d22; color: #6ee7a0; }
+  .act-card.tool  { background: #0d1f12; border: 1px solid #1d3d22; color: #6ee7a0; cursor: pointer; user-select: none; }
+  .act-card.tool.expanded { border-radius: 7px 7px 0 0; }
   .act-card.esc   { background: #1f150a; border: 1px solid #3d2710; color: var(--orange); }
   .act-card.info  { background: #0d1320; border: 1px solid #1d2d40; color: #60a5fa; }
   .act-card-icon  { flex-shrink: 0; font-size: 13px; line-height: 1.3; }
   .act-card-body  { flex: 1; min-width: 0; }
   .act-card-title { font-weight: 600; }
   .act-card-sub   { color: inherit; opacity: .75; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act-card-chev  { font-size: 10px; opacity: .6; margin-left: auto; padding-left: 6px; flex-shrink: 0; transition: transform .2s; }
+  .act-card.expanded .act-card-chev { transform: rotate(180deg); }
+  .act-card.tool.expanded { border-radius: 7px 7px 0 0; }
+  .act-card-detail { display: none; background: #080f0a; border: 1px solid #1d3d22; border-top: none; border-radius: 0 0 7px 7px; padding: 7px 10px; font-size: 10px; color: #6ee7a0; opacity: .85; line-height: 1.6; max-height: 220px; overflow-y: auto; font-family: 'Consolas', monospace; }
+
+  /* ── Scroll-to-bottom FAB ── */
+  .scroll-fab { position: absolute; bottom: 14px; right: 14px; background: #1e2d45; border: 1px solid #3a5070; border-radius: 20px; color: #60a5fa; font-size: 12px; padding: 5px 12px; cursor: pointer; box-shadow: 0 2px 8px #00000060; z-index: 10; display: none; align-items: center; gap: 5px; transition: opacity .2s; white-space: nowrap; }
+  .scroll-fab:hover { background: #253d58; }
 
   /* ── Image handling ── */
   .img-previews { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 4px; }
@@ -422,6 +431,15 @@
   .insp-tool-name.red { color: #f87171; }
   .insp-tool-desc { font-size: 11px; color: var(--muted); line-height: 1.5; }
   .insp-tool-red-badge { font-size: 9px; background: #3a0e0e; color: #f87171; border: 1px solid #5a1a1a; border-radius: 3px; padding: 1px 5px; margin-left: 4px; flex-shrink: 0; }
+  .insp-skill-list { display: flex; flex-direction: column; gap: 6px; }
+  .insp-skill { display: flex; align-items: flex-start; gap: 8px; background: #0f1525; border: 1px solid #1e2840; border-radius: 7px; padding: 8px 10px; }
+  .insp-skill.active { border-color: #1f6d4d; background: #0d241a; }
+  .insp-skill-btn { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 999px; font-size: 11px; padding: 2px 8px; cursor: pointer; }
+  .insp-skill-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .insp-skill-btn.active { border-color: #34d399; color: #34d399; }
+  .insp-skill-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .insp-skill-name { font-size: 12px; font-weight: 600; color: var(--accent); font-family: monospace; }
+  .insp-skill-desc { font-size: 11px; color: var(--muted); line-height: 1.5; margin-top: 1px; }
   .insp-prompt-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
   .insp-tab { font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; transition: all .12s; }
   .insp-tab.active { background: #1e2840; color: var(--accent); border-color: var(--accent); }
@@ -511,6 +529,7 @@
         从左侧选择 Agent 开始对话
       </div>
     </div>
+    <button class="scroll-fab" id="scrollFab" onclick="scrollBottom(true)">↓ 回到底部</button>
     <div class="composer">
       <div class="recipients-summary" id="recipientSummary">尚未选择收件人</div>
       <div class="img-previews" id="imgPreviews"></div>
@@ -587,6 +606,7 @@ let ws = null;
 let streamingBubbles = {};
 let selection = {};       // agentName → 'to'|'cc'|null
 let allAgents = [];       // [{name, description, role, capabilities, is_temp}]
+let allSkills = [];       // [{id, name, description}]
 let allProjects = [];
 let currentProject = '';
 let tempAgentNames = new Set();
@@ -677,7 +697,33 @@ function showToast(msg, ms=2500) {
   const t = el('toast'); t.textContent = msg; t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), ms);
 }
-function scrollBottom() { el('msgList').scrollTop = el('msgList').scrollHeight; }
+let followMsgList = true;
+function isNearBottom(threshold = 72) {
+  const list = el('msgList');
+  if (!list) return true;
+  return (list.scrollHeight - list.scrollTop - list.clientHeight) <= threshold;
+}
+function _updateScrollFab() {
+  const fab = el('scrollFab');
+  if (!fab) return;
+  fab.style.display = followMsgList ? 'none' : 'flex';
+}
+function scrollBottom(force = false) {
+  const list = el('msgList');
+  if (!list) return;
+  if (force || followMsgList || isNearBottom()) {
+    list.scrollTop = list.scrollHeight;
+    followMsgList = true;
+    _updateScrollFab();
+  }
+}
+const _msgListEl = el('msgList');
+if (_msgListEl) {
+  _msgListEl.addEventListener('scroll', () => {
+    followMsgList = isNearBottom();
+    _updateScrollFab();
+  });
+}
 
 function renderThreadPauseState() {
   const btn = el('teamPauseBtn');
@@ -1027,12 +1073,14 @@ async function deleteProject(name, evt) {
     currentProject = data.switched_to;
     el('projectName').textContent = currentProject;
     selection = {}; updateRecipientSummary();
+    allSkills = [];
     renderAgents(data.agents || []);
     el('msgList').innerHTML = `<div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">已切换到项目：${escHtml(currentProject)}</div>`;
   } else {
     currentProject = '';
     el('projectName').textContent = '—';
     selection = {}; updateRecipientSummary();
+    allSkills = [];
     renderAgents([]);
     el('msgList').innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">请新建一个项目</div>';
   }
@@ -1053,6 +1101,7 @@ async function switchProject(name) {
   el('projectName').textContent = name;
   el('msgList').innerHTML = `<div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">已切换到项目：${escHtml(name)}</div>`;
   selection = {}; updateRecipientSummary();
+  allSkills = [];
   pendingImages = []; renderImagePreviews();
   renderProjectDropdown();
   showToast(`已切换到 ${name}`);
@@ -1074,6 +1123,7 @@ async function confirmNewProject() {
   el('projectName').textContent = name;
   el('msgList').innerHTML = `<div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">新项目已创建，和 orchestrator 对话来组建团队</div>`;
   selection = {}; updateRecipientSummary();
+  allSkills = [];
   pendingImages = []; renderImagePreviews();
   allProjects.push(name);
   showToast(`项目 "${name}" 已创建`);
@@ -1134,6 +1184,14 @@ async function fetchAgentsOnce() {
   const agents = (data && data.agents) || [];
   renderAgents(agents);
   return agents;
+}
+
+async function fetchAllSkills() {
+  const res = await fetch('/api/skills');
+  if (!res.ok) return [];
+  const data = await res.json();
+  allSkills = (data && data.skills) || [];
+  return allSkills;
 }
 
 function _agentNameSnapshot(agents) {
@@ -1244,39 +1302,55 @@ function appendSysMsg(text) {
 }
 
 function appendToolResult(toolName, result, triggeredBy) {
-  const card = document.createElement('div');
-  card.className = 'act-card tool';
+  // Summary shown in collapsed header
+  const firstLine = (result || '').split('\n')[0] || '';
+  const summary = firstLine.length > 100 ? firstLine.slice(0, 100) + '…' : firstLine;
 
-  let bodyHtml;
+  // Link list for web tools
+  let detailInner = escHtml(result);
   if (toolName === 'web_search' || toolName === 'web_read') {
     const linkRe = /\[([^\]]*)\]\((https?:\/\/[^\)]+)\)/g;
     const links = [];
     let m;
-    while ((m = linkRe.exec(result)) !== null) {
-      links.push({ title: m[1], url: m[2] });
+    while ((m = linkRe.exec(result)) !== null) links.push({ title: m[1], url: m[2] });
+    if (links.length) {
+      const linksHtml = `<div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #1d3d22">${
+        links.slice(0, 10).map(l =>
+          `<a href="${escHtml(l.url)}" target="_blank" rel="noopener"
+              style="font-size:11px;color:#60a5fa;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+              title="${escHtml(l.url)}">↗ ${escHtml(l.title)}</a>`
+        ).join('')
+      }${links.length > 10 ? `<span style="font-size:10px;opacity:.6">…及 ${links.length - 10} 条</span>` : ''}</div>`;
+      detailInner = linksHtml + `<div style="white-space:pre-wrap;word-break:break-word">${escHtml(result)}</div>`;
     }
-    const linksHtml = links.length
-      ? `<div style="margin-top:4px;display:flex;flex-direction:column;gap:2px">${
-          links.slice(0, 8).map(l =>
-            `<a href="${escHtml(l.url)}" target="_blank" rel="noopener" style="font-size:11px;color:#60a5fa;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(l.url)}">↗ ${escHtml(l.title)}</a>`
-          ).join('')
-        }${links.length > 8 ? `<span style="font-size:10px;opacity:.6">…及 ${links.length - 8} 条</span>` : ''}</div>`
-      : '';
-    const firstLine = result.split('\n')[0] || '';
-    const display = firstLine.length > 120 ? firstLine.slice(0, 120) + '…' : firstLine;
-    bodyHtml = `
-      <div class="act-card-title">${escHtml(toolName)}<span style="font-weight:400;margin-left:6px;opacity:.7">by ${escHtml(triggeredBy)}</span></div>
-      <div class="act-card-sub">${escHtml(display)}</div>
-      ${linksHtml}`;
-  } else {
-    const display = result.length > 120 ? result.slice(0, 120) + '…' : result;
-    bodyHtml = `
-      <div class="act-card-title">${escHtml(toolName)}<span style="font-weight:400;margin-left:6px;opacity:.7">by ${escHtml(triggeredBy)}</span></div>
-      <div class="act-card-sub">${escHtml(display)}</div>`;
   }
 
-  card.innerHTML = `<span class="act-card-icon">🔧</span><div class="act-card-body">${bodyHtml}</div>`;
-  el('msgList').appendChild(card);
+  // Wrapper is the single flex item; card + detail inside
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'display:flex;flex-direction:column;align-self:center;width:90%;max-width:90%';
+
+  const card = document.createElement('div');
+  card.className = 'act-card tool';
+  card.innerHTML = `
+    <span class="act-card-icon">🔧</span>
+    <div class="act-card-body">
+      <div class="act-card-title">${escHtml(toolName)}<span style="font-weight:400;margin-left:6px;opacity:.7">by ${escHtml(triggeredBy)}</span></div>
+      <div class="act-card-sub">${escHtml(summary)}</div>
+    </div>
+    <span class="act-card-chev">▼</span>`;
+
+  const detail = document.createElement('div');
+  detail.className = 'act-card-detail';
+  detail.innerHTML = detailInner;
+
+  card.addEventListener('click', () => {
+    const open = card.classList.toggle('expanded');
+    detail.style.display = open ? 'block' : 'none';
+  });
+
+  wrapper.appendChild(card);
+  wrapper.appendChild(detail);
+  el('msgList').appendChild(wrapper);
   scrollBottom();
 }
 
@@ -1351,7 +1425,17 @@ function updateStreamToolCallFold(name, toolBlocks, partial) {
 }
 
 function appendMessage(env) {
-  if (env.metadata && env.metadata.tool_feedback) return;
+  if (env.metadata && env.metadata.tool_feedback) {
+    const items = env.metadata.tool_results;
+    if (Array.isArray(items) && items.length) {
+      items.forEach(it => appendToolResult(
+        it.tool || '',
+        it.result || '',
+        it.triggered_by || (env.to && env.to[0]) || ''
+      ));
+    }
+    return;
+  }
   const isUser = env.sender === 'user';
   const isTemp = env.metadata && env.metadata.is_temp;
   const isAutoFwd = env.metadata && env.metadata.auto_forward;
@@ -1536,6 +1620,9 @@ async function openAgentInspector(name) {
   el('inspRole').textContent = '...';
   el('inspBody').innerHTML = '<div style="color:var(--muted);font-size:12px;padding:20px 0;">加载中...</div>';
   insp.classList.add('open');
+  if (!allSkills.length) {
+    try { await fetchAllSkills(); } catch (_) {}
+  }
   if (!inspectorCache[name]) {
     try {
       const res = await fetch(`/api/agents/${encodeURIComponent(name)}/effective_prompt`);
@@ -1550,6 +1637,25 @@ async function openAgentInspector(name) {
 }
 function renderAgentInspector(name, data) {
   el('inspRole').textContent = data.is_temp ? 'temp' : (data.role || 'member');
+  const mounted = Array.isArray(data.skills) ? data.skills : [];
+  const mountedSet = new Set(mounted);
+  const canEditSkills = data.role !== 'orchestrator' && !data.is_temp;
+  const skillsHtml = allSkills.length
+    ? allSkills.map(s => {
+      const sid = String(s.id || '').trim();
+      const isActive = mountedSet.has(sid);
+      const btnText = isActive ? '已挂载' : '挂载';
+      const btnClass = `insp-skill-btn${isActive ? ' active' : ''}`;
+      return `
+      <div class="insp-skill${isActive ? ' active' : ''}">
+        <div style="flex:1;min-width:0">
+          <div class="insp-skill-name">${escHtml(s.name || sid)}</div>
+          <div class="insp-skill-desc">${escHtml(s.description || '—')}</div>
+        </div>
+        <button class="${btnClass}" ${canEditSkills ? '' : 'disabled'} onclick="toggleSkill('${name}','${sid}')">${btnText}</button>
+      </div>`;
+    }).join('')
+    : '<div style="color:var(--muted);font-size:12px">该项目暂无可用 skills</div>';
   const tools = data.available_tools || [];
   const toolsHtml = tools.length
     ? tools.map(t => `
@@ -1563,7 +1669,13 @@ function renderAgentInspector(name, data) {
     : '<div style="color:var(--muted);font-size:12px">无可用工具</div>';
   const promptRaw = data.raw_instructions || '（无）';
   const promptFull = data.effective_instructions || '（无）';
+  const skillHint = canEditSkills ? '' : '<div style="font-size:11px;color:var(--muted);margin-top:6px">orchestrator/临时成员不支持修改 skills</div>';
   el('inspBody').innerHTML = `
+    <div>
+      <div class="insp-section-title">可用 Skills (${allSkills.length}) / 已挂载 (${mounted.length})</div>
+      <div class="insp-skill-list">${skillsHtml}</div>
+      ${skillHint}
+    </div>
     <div>
       <div class="insp-section-title">可用工具 (${tools.length})</div>
       <div class="insp-tool-list">${toolsHtml}</div>
@@ -1596,6 +1708,31 @@ function switchInspectorTab(tab, name) {
 }
 function closeAgentInspector() {
   el('agentInspector').classList.remove('open');
+}
+
+async function toggleSkill(agentName, skillId) {
+  const cache = inspectorCache[agentName];
+  if (!cache) return;
+  if (cache.role === 'orchestrator' || cache.is_temp) {
+    showToast('当前成员不支持修改 skills');
+    return;
+  }
+  const mounted = Array.isArray(cache.skills) ? [...cache.skills] : [];
+  const exists = mounted.includes(skillId);
+  const next = exists ? mounted.filter(s => s !== skillId) : [...mounted, skillId];
+  const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/skills`, {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ skills: next }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    showToast('❌ ' + (data.detail || '更新 skills 失败'));
+    return;
+  }
+  inspectorCache[agentName] = null;
+  await openAgentInspector(agentName);
+  showToast(`已${exists ? '卸载' : '挂载'} skill: ${skillId}`);
 }
 async function fetchPendingQuestions() {
   const res = await fetch(`/api/threads/${encodeURIComponent(THREAD_ID)}/questions?status=pending`);
@@ -1863,6 +2000,7 @@ function connect() {
         localStorage.setItem('thread_id::__last__', THREAD_ID);
       }
       renderAgents(ev.agents || []);
+      fetchAllSkills();
       el('msgList').innerHTML = '';
       (ev.log || []).forEach(appendMessage);
       fetchProjects();
