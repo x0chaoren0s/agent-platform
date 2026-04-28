@@ -27,7 +27,7 @@
 ```text
 agent-platform/
   core/                 # Agent 注册、路由、记忆、检查点、平台工具
-  core/tools/           # 工具基类、自动发现注册表（RuntimeToolRegistry）、按类别划分的工具实现与兼容门面
+  core/tools/           # 工具基类、自动发现注册表（RuntimeToolRegistry）、按类别划分的工具实现与兼容门面（含 files_* 工作区文件类工具）
   projects/             # 项目配置与 Agent YAML（运行数据已在 .gitignore 中排除）
     <project>/memory/tasks.db   # 任务与提问存储
     <project>/workspace/        # 交付物文件目录（默认忽略，仅保留 .gitkeep）
