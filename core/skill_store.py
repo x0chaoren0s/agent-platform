@@ -1,7 +1,7 @@
-"""Project-local skill loading for member agents.
+"""Two-tier skill loading: system-level + project-level.
 
-Skill layout (MVP):
-projects/<project>/skills/<skill_name>/SKILL.md
+System skills:  agent-platform/skills/<skill_name>/SKILL.md  (shared across all projects)
+Project skills: projects/<project>/skills/<skill_name>/SKILL.md  (project-specific, overrides system)
 """
 
 from __future__ import annotations
@@ -20,19 +20,23 @@ def _skills_dir(project_dir: Path) -> Path:
     return project_dir / "skills"
 
 
+def _system_skills_dir() -> Path:
+    """agent-platform 自身的系统级 skills 目录，所有项目共享。"""
+    return Path(__file__).resolve().parent.parent / "skills"
+
+
 def _global_skill_roots() -> list[Path]:
+    """Extra skill roots beyond the system and project directories.
+
+    AGENT_PLATFORM_SKILL_ROOTS env var can list additional paths (os.pathsep-separated).
+    """
     roots: list[Path] = []
-    # Optional override: multiple paths separated by os.pathsep.
     extra = os.environ.get("AGENT_PLATFORM_SKILL_ROOTS", "").strip()
     if extra:
         for item in extra.split(os.pathsep):
             p = Path(item).expanduser()
             if p.exists() and p.is_dir():
                 roots.append(p)
-    home = Path.home()
-    for p in [home / ".claude" / "skills", home / ".cursor" / "skills"]:
-        if p.exists() and p.is_dir():
-            roots.append(p)
     # Stable de-dup preserving order.
     out: list[Path] = []
     seen: set[str] = set()
@@ -45,8 +49,11 @@ def _global_skill_roots() -> list[Path]:
 
 
 def _skill_file_candidates(project_dir: Path, skill_name: str) -> list[Path]:
-    local = _skills_dir(project_dir) / skill_name / "SKILL.md"
-    candidates = [local]
+    """Search order: project-local → system → extra global roots."""
+    candidates = [_skills_dir(project_dir) / skill_name / "SKILL.md"]
+    sys_dir = _system_skills_dir()
+    if sys_dir.exists():
+        candidates.append(sys_dir / skill_name / "SKILL.md")
     for root in _global_skill_roots():
         candidates.append(root / skill_name / "SKILL.md")
     return candidates

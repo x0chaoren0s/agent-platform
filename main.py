@@ -614,28 +614,64 @@ def create_agent(req: CreateAgentRequest):
 
 @app.get("/api/skills")
 def list_skills():
-    """List all skills in active project."""
+    """List all skills available to the active project (project-local + system-level)."""
     pdir = _project_dir(_current_project)
-    skills_dir = pdir / "skills"
-    if not skills_dir.exists():
-        return {"project": _current_project, "skills": []}
-
     skills: list[dict[str, str]] = []
-    for skill_file in sorted(skills_dir.glob("*/SKILL.md")):
-        skill_id = skill_file.parent.name
-        parsed = skill_store.read_skill(str(pdir), skill_id)
-        if parsed is None:
-            skills.append({"id": skill_id, "name": skill_id, "description": ""})
-            continue
-        frontmatter, _ = parsed
-        skills.append(
-            {
-                "id": skill_id,
-                "name": str(frontmatter.get("name", "")).strip() or skill_id,
-                "description": str(frontmatter.get("description", "")).strip(),
-            }
-        )
+    seen_ids: set[str] = set()
+
+    # 1. Project-local skills (take priority, can override system skills with same id)
+    skills_dir = pdir / "skills"
+    if skills_dir.exists():
+        for skill_file in sorted(skills_dir.glob("*/SKILL.md")):
+            skill_id = skill_file.parent.name
+            parsed = skill_store.read_skill(str(pdir), skill_id)
+            if parsed is None:
+                skills.append({"id": skill_id, "name": skill_id, "description": "", "scope": "project"})
+            else:
+                frontmatter, _ = parsed
+                skills.append(
+                    {
+                        "id": skill_id,
+                        "name": str(frontmatter.get("name", "")).strip() or skill_id,
+                        "description": str(frontmatter.get("description", "")).strip(),
+                        "scope": "project",
+                    }
+                )
+            seen_ids.add(skill_id)
+
+    # 2. System-level skills (agent-platform/skills/)
+    _add_skills_from_roots(skills, seen_ids, [skill_store._system_skills_dir()])
+
+    # 3. Extra global roots (AGENT_PLATFORM_SKILL_ROOTS)
+    _add_skills_from_roots(skills, seen_ids, skill_store._global_skill_roots())
+
     return {"project": _current_project, "skills": skills}
+
+
+def _add_skills_from_roots(
+    skills: list[dict[str, str]], seen_ids: set[str], roots: list[Path]
+) -> None:
+    for root in roots:
+        if not root.exists():
+            continue
+        for skill_file in sorted(root.glob("*/SKILL.md")):
+            skill_id = skill_file.parent.name
+            if skill_id in seen_ids:
+                continue
+            parsed = skill_store._parse_skill_md(skill_file)
+            if parsed is None:
+                skills.append({"id": skill_id, "name": skill_id, "description": "", "scope": "system"})
+            else:
+                frontmatter, _ = parsed
+                skills.append(
+                    {
+                        "id": skill_id,
+                        "name": str(frontmatter.get("name", "")).strip() or skill_id,
+                        "description": str(frontmatter.get("description", "")).strip(),
+                        "scope": "system",
+                    }
+                )
+            seen_ids.add(skill_id)
 
 
 @app.put("/api/agents/{name}/skills")

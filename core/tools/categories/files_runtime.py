@@ -37,6 +37,38 @@ def _safe_workspace_path(project_dir: str, raw_path: str | None) -> Path:
     return target
 
 
+def _resolve_skill_fallback(raw_path: str) -> Path | None:
+    """Try to resolve a path against system/global skill roots.
+
+    Handles paths like:
+      skills/lark-doc/references/xxx.md  →  look in agent-platform/skills/lark-doc/references/xxx.md
+      ../lark-shared/SKILL.md            →  look in agent-platform/skills/lark-shared/SKILL.md
+    """
+    from core.skill_store import _system_skills_dir, _global_skill_roots
+
+    rel = raw_path.strip().replace("\\", "/")
+    # Strip skills/ or ../ prefix to get skill-relative path
+    if rel.startswith("skills/"):
+        sub = rel[len("skills/"):]
+    elif rel.startswith("../"):
+        sub = rel[3:]
+    else:
+        return None
+
+    sys_dir = _system_skills_dir()
+    for root in [sys_dir] + _global_skill_roots():
+        if not root.exists():
+            continue
+        candidate = (root / sub).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
 def _first_segment(rel: str) -> str:
     r = rel.strip().replace("\\", "/").strip("/")
     if not r:
@@ -122,10 +154,17 @@ async def read_file(
     _ = thread_id, caller_agent
     if not path or not str(path).strip():
         return "错误：read_file 必须提供 path。"
+    target = None
     try:
         target = _safe_workspace_path(project_dir, path)
-    except ValueError as exc:
-        return f"错误：{exc}"
+    except ValueError:
+        pass  # Fall through to skill fallback
+    if target is None or not target.exists():
+        alt = _resolve_skill_fallback(path)
+        if alt is not None:
+            target = alt
+    if target is None:
+        return f"错误：路径越界：{path}"
     if not target.exists():
         return f"错误：文件不存在：{path}"
     if not target.is_file():
