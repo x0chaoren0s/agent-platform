@@ -8,7 +8,7 @@ from ..base import BaseTool, ToolContext
 
 class WebSearchTool(BaseTool):
     name = "web_search"
-    roles = frozenset({"member", "temp"})
+    roles = frozenset({"member", "orchestrator", "temp"})
     is_red = False
     desc = "搜索互联网信息"
     signature = "web_search(query*, limit?)"
@@ -26,7 +26,7 @@ class WebSearchTool(BaseTool):
 
 class WebReadTool(BaseTool):
     name = "web_read"
-    roles = frozenset({"member", "temp"})
+    roles = frozenset({"member", "orchestrator", "temp"})
     is_red = False
     desc = "读取网页正文"
     signature = "web_read(url*)"

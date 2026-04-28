@@ -75,6 +75,9 @@ def list_team(project_dir: str) -> str:
     return yaml.dump(result, allow_unicode=True, sort_keys=False)
 
 
+_VALID_FIXED_ROLES: frozenset[str] = frozenset({"member"})
+
+
 def recruit_fixed(
     project_dir: str,
     name: str,
@@ -87,6 +90,9 @@ def recruit_fixed(
         name = _validate_name(name)
     except ValueError as e:
         return f"错误：{e}"
+    # Normalize role — fixed members are always "member"; ignore LLM-hallucinated values.
+    if role not in _VALID_FIXED_ROLES:
+        role = "member"
     agents_path = _agents_dir(Path(project_dir))
     agents_path.mkdir(parents=True, exist_ok=True)
     yaml_path = agents_path / f"{name}.yaml"

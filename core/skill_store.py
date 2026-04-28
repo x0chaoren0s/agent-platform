@@ -7,6 +7,7 @@ projects/<project>/skills/<skill_name>/SKILL.md
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,38 @@ logger = logging.getLogger(__name__)
 
 def _skills_dir(project_dir: Path) -> Path:
     return project_dir / "skills"
+
+
+def _global_skill_roots() -> list[Path]:
+    roots: list[Path] = []
+    # Optional override: multiple paths separated by os.pathsep.
+    extra = os.environ.get("AGENT_PLATFORM_SKILL_ROOTS", "").strip()
+    if extra:
+        for item in extra.split(os.pathsep):
+            p = Path(item).expanduser()
+            if p.exists() and p.is_dir():
+                roots.append(p)
+    home = Path.home()
+    for p in [home / ".claude" / "skills", home / ".cursor" / "skills"]:
+        if p.exists() and p.is_dir():
+            roots.append(p)
+    # Stable de-dup preserving order.
+    out: list[Path] = []
+    seen: set[str] = set()
+    for p in roots:
+        key = str(p.resolve())
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
+def _skill_file_candidates(project_dir: Path, skill_name: str) -> list[Path]:
+    local = _skills_dir(project_dir) / skill_name / "SKILL.md"
+    candidates = [local]
+    for root in _global_skill_roots():
+        candidates.append(root / skill_name / "SKILL.md")
+    return candidates
 
 
 def _parse_skill_md(path: Path) -> tuple[dict[str, Any], str] | None:
@@ -35,6 +68,8 @@ def _parse_skill_md(path: Path) -> tuple[dict[str, Any], str] | None:
         logger.exception("Failed reading skill file: %s", path)
         return None
 
+    # Be tolerant of UTF-8 BOM (common on Windows/PowerShell).
+    text = text.lstrip("\ufeff")
     if not text.startswith("---"):
         return None
     parts = text.split("---", 2)
@@ -53,10 +88,10 @@ def _parse_skill_md(path: Path) -> tuple[dict[str, Any], str] | None:
 
 def read_skill(project_dir: str | Path, skill_name: str) -> tuple[dict[str, Any], str] | None:
     pdir = Path(project_dir)
-    skill_file = _skills_dir(pdir) / skill_name / "SKILL.md"
-    if not skill_file.exists():
-        return None
-    return _parse_skill_md(skill_file)
+    for skill_file in _skill_file_candidates(pdir, skill_name):
+        if skill_file.exists():
+            return _parse_skill_md(skill_file)
+    return None
 
 
 def read_agent_skills(project_dir: str | Path, agent_name: str) -> list[str]:
@@ -111,14 +146,12 @@ def load_for_agent(project_dir: str | Path, agent_name: str, skill_name: str) ->
         return f"错误：未给 {agent_name} 挂载 skill: {skill_name}。已挂载: {allowed_text}"
 
     pdir = Path(project_dir)
-    skill_dir = _skills_dir(pdir)
-    if not skill_dir.exists():
-        return f"错误：skill 目录不存在: {skill_dir}"
-    skill_file = skill_dir / skill_name / "SKILL.md"
-    if not skill_file.exists():
-        return f"错误：SKILL.md 不存在于 {skill_name} 目录"
-    parsed = _parse_skill_md(skill_file)
+    parsed = read_skill(pdir, skill_name)
     if parsed is None:
-        return f"错误：SKILL.md frontmatter 解析失败: {skill_name}"
+        roots = [str(_skills_dir(pdir))] + [str(p) for p in _global_skill_roots()]
+        return (
+            f"错误：未找到可解析的 SKILL.md：{skill_name}。\n"
+            f"已搜索目录：{', '.join(roots)}"
+        )
     _, body = parsed
     return body

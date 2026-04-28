@@ -109,7 +109,10 @@ def _build_agent(
     agent_id: str = cfg["name"]
     instructions: str = cfg.get("instructions", "You are a helpful assistant.")
     max_history: int = cfg.get("max_history", 80)
-    role: str = cfg.get("role", "member")
+    raw_role: str = cfg.get("role", "member")
+    # Normalize LLM-hallucinated or legacy role values: only "orchestrator" is special;
+    # everything else (including Chinese variants like "固定成员") maps to "member".
+    role: str = raw_role if raw_role == "orchestrator" else "member"
     is_temp: bool = cfg.get("is_temp", False)
     effective_instructions = instructions
     if role == "member":
