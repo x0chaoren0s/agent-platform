@@ -70,6 +70,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("agent-platform")
 
 PROJECTS_ROOT = Path(__file__).parent / "projects"
+TRASH_ROOT = PROJECTS_ROOT / ".trash"
 WEB_DIR = Path(__file__).parent / "web"
 
 # ---------------------------------------------------------------------------
@@ -89,6 +90,37 @@ _heartbeat_scheduler: HeartbeatScheduler | None = None
 
 def _project_dir(name: str) -> Path:
     return PROJECTS_ROOT / name
+
+
+def _find_trashed_project(name: str) -> Path | None:
+    """Return path to trashed project dir for *name*, or None.
+
+    Searches for exact match and timestamp-suffixed variants (name_<epoch>).
+    """
+    TRASH_ROOT.mkdir(parents=True, exist_ok=True)
+    candidate = TRASH_ROOT / name
+    if candidate.is_dir():
+        return candidate
+    prefix = name + "_"
+    for entry in TRASH_ROOT.iterdir():
+        if entry.is_dir() and entry.name.startswith(prefix):
+            suffix = entry.name[len(prefix):]
+            if suffix.isdigit():
+                return entry
+    return None
+
+
+def _trash_project_dir(name: str) -> Path:
+    """Return a non-colliding path inside .trash for *name*.
+
+    If .trash/{name} already exists, append _{int(time.time())}.
+    """
+    TRASH_ROOT.mkdir(parents=True, exist_ok=True)
+    target = TRASH_ROOT / name
+    if not target.exists():
+        return target
+    suffix = int(time.time())
+    return TRASH_ROOT / f"{name}_{suffix}"
 
 
 def _activate(name: str) -> None:
@@ -431,7 +463,7 @@ def list_projects():
     PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
     projects = sorted(
         p.name for p in PROJECTS_ROOT.iterdir()
-        if p.is_dir() and (p / "agents").exists()
+        if p.is_dir() and p.name != ".trash" and (p / "agents").exists()
     )
     return {"current": _current_project, "projects": projects}
 
@@ -447,13 +479,35 @@ def create_project(req: CreateProjectRequest):
         raise HTTPException(status_code=400, detail="项目名只能包含字母、数字、下划线和连字符，长度 1-40")
     pdir = _project_dir(name)
     if pdir.exists():
-        # Treat a folder as an existing project only when it has an agents dir.
-        # This allows recovering from partial-delete leftovers (e.g. only context.md remains).
         if (pdir / "agents").exists():
             raise HTTPException(status_code=409, detail=f"项目 '{name}' 已存在")
+        # Partial-delete leftover: fall through to scaffold (cleans up by recreating agents/)
+
+    # Check trash for a previously deleted project with this name
+    trashed = _find_trashed_project(name)
+    if trashed is not None:
+        return {
+            "ok": False,
+            "conflict": "trash_restore",
+            "trashed_name": name,
+            "message": f"回收站中存在同名项目 '{name}'，请选择恢复旧团队或创建全新团队。",
+        }
+
     _scaffold_project(name)
     _activate(name)
     return {"ok": True, "name": name, "agents": _registry.list_info()}
+
+
+
+@app.get("/api/projects/trash")
+def list_trashed_projects():
+    """List all trashed projects."""
+    TRASH_ROOT.mkdir(parents=True, exist_ok=True)
+    trashed = sorted(
+        p.name for p in TRASH_ROOT.iterdir()
+        if p.is_dir()
+    )
+    return {"ok": True, "trash": trashed}
 
 
 @app.post("/api/projects/{name}/activate")
@@ -467,7 +521,7 @@ def activate_project(name: str):
 
 @app.delete("/api/projects/{name}")
 def delete_project(name: str):
-    """Delete a project directory and all its contents."""
+    """Soft-delete: move project directory to .trash so it can be restored later."""
     global _current_project, _registry, _session_store, _routers
 
     pdir = _project_dir(name)
@@ -476,7 +530,7 @@ def delete_project(name: str):
 
     is_active = (name == _current_project)
 
-    # Stop watching if active project
+    # Deactivate if active project
     if is_active and _registry is not None:
         _registry.stop_watching()
         _registry = None
@@ -484,16 +538,16 @@ def delete_project(name: str):
         _routers.clear()
         _current_project = ""
 
-    _force_remove_tree(pdir)
-    if pdir.exists():
-        raise HTTPException(status_code=500, detail=f"项目 '{name}' 删除失败：目录仍存在")
-    logger.info("Deleted project '%s'", name)
+    # Move to trash instead of hard-delete
+    target = _trash_project_dir(name)
+    pdir.rename(target)
+    logger.info("Moved project '%s' to trash as '%s'", name, target.name)
 
-    # Find remaining projects
+    # Find remaining projects (exclude .trash)
     PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
     remaining = sorted(
         p.name for p in PROJECTS_ROOT.iterdir()
-        if p.is_dir() and (p / "agents").exists()
+        if p.is_dir() and p.name != ".trash" and (p / "agents").exists()
     )
 
     # Auto-activate first remaining project if we deleted the active one
@@ -502,6 +556,7 @@ def delete_project(name: str):
         return {
             "ok": True,
             "deleted": name,
+            "trashed_to": target.name,
             "switched_to": _current_project,
             "projects": remaining,
             "agents": _registry.list_info() if _registry else [],
@@ -510,10 +565,47 @@ def delete_project(name: str):
     return {
         "ok": True,
         "deleted": name,
+        "trashed_to": target.name,
         "switched_to": _current_project,
         "projects": remaining,
         "agents": _registry.list_info() if _registry else [],
     }
+
+
+@app.post("/api/projects/{name}/restore")
+def restore_project(name: str):
+    """Restore a trashed project back to active projects."""
+    trashed = _find_trashed_project(name)
+    if trashed is None:
+        raise HTTPException(status_code=404, detail=f"回收站中不存在项目 '{name}'")
+
+    target = _project_dir(name)
+    if target.exists():
+        raise HTTPException(status_code=409, detail=f"项目 '{name}' 已存在，无法恢复")
+
+    trashed.rename(target)
+    _activate(name)
+    logger.info("Restored project '%s' from trash", name)
+
+    return {
+        "ok": True,
+        "name": name,
+        "agents": _registry.list_info(),
+    }
+
+
+@app.post("/api/projects/{name}/discard-trash")
+def discard_trashed_project(name: str):
+    """Permanently delete a trashed project."""
+    trashed = _find_trashed_project(name)
+    if trashed is None:
+        raise HTTPException(status_code=404, detail=f"回收站中不存在项目 '{name}'")
+
+    _force_remove_tree(trashed)
+    logger.info("Permanently deleted trashed project '%s'", name)
+
+    return {"ok": True, "deleted": name}
+
 
 
 # ---------------------------------------------------------------------------
@@ -1371,8 +1463,7 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
         await _checkpoint_store.init_db()
         existing = await _conv_store.get(thread_id)
         if existing is None:
-            from datetime import datetime as _dt
-            default_name = f"对话 {_dt.now().strftime('%m-%d %H:%M')}"
+            default_name = f"对话 {thread_id}"
             await _conv_store.create(thread_id, _current_project, default_name)
         # Do NOT touch() on connect — only update last_active when a message is actually sent
 

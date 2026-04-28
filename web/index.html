@@ -1060,14 +1060,14 @@ function toggleNewForm(force) {
 
 async function deleteProject(name, evt) {
   if (evt) evt.stopPropagation();
-  if (!confirm(`确定要删除项目 "${name}" 吗？\n此操作不可撤销，所有数据将被清除。`)) return;
+  if (!confirm(`确定要解散团队 "${name}" 吗？\n项目将移至回收站，可从回收站恢复。`)) return;
   toggleProjectDropdown(false);
   const res = await fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' });
   const data = await res.json();
   if (!res.ok) { showToast('❌ ' + (data.detail || '删除失败')); return; }
 
   allProjects = data.projects || [];
-  showToast(`项目 "${name}" 已删除`);
+  showToast(`项目 "${name}" 已移至回收站`);
 
   if (data.switched_to && data.switched_to !== name) {
     currentProject = data.switched_to;
@@ -1117,6 +1117,14 @@ async function confirmNewProject() {
     body: JSON.stringify({name})
   });
   const data = await res.json();
+
+  // Handle trash restore conflict
+  if (data && data.conflict === 'trash_restore') {
+    toggleNewForm(false);
+    showTrashRestoreDialog(name);
+    return;
+  }
+
   if (!res.ok) { showToast('❌ ' + (data.detail||'创建失败')); return; }
   toggleNewForm(false);
   currentProject = name;
@@ -1126,6 +1134,89 @@ async function confirmNewProject() {
   allSkills = [];
   pendingImages = []; renderImagePreviews();
   allProjects.push(name);
+  showToast(`项目 "${name}" 已创建`);
+  _reconnectForProject(name);
+}
+
+// ── Trash restore dialog ──────────────────────────────────────────────────────
+
+function showTrashRestoreDialog(name) {
+  const existing = document.getElementById('trashRestoreDialog');
+  if (existing) existing.remove();
+
+  const div = document.createElement('div');
+  div.id = 'trashRestoreDialog';
+  div.className = 'restore-modal';
+  div.innerHTML = `
+    <div class="restore-modal-box">
+      <div class="restore-modal-title">发现回收站中的旧项目</div>
+      <div class="restore-modal-hint">项目「${escHtml(name)}」此前被解散，回收站仍保留其数据。请选择：</div>
+      <div class="restore-modal-opts" style="flex-direction:column;align-items:stretch;gap:10px;">
+        <button class="restore-confirm-btn" style="width:100%;padding:12px;font-size:14px;" onclick="doRestoreProject('${escHtml(name)}')">
+          恢复旧团队（保留聊天记录和记忆）
+        </button>
+        <button class="form-btn confirm" style="width:100%;padding:12px;font-size:14px;" onclick="doStartFreshProject('${escHtml(name)}')">
+          创建全新团队（清空回收站数据）
+        </button>
+        <button class="form-btn cancel" style="width:100%;padding:12px;font-size:14px;" onclick="closeTrashRestoreDialog()">
+          取消
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(div);
+}
+
+function closeTrashRestoreDialog() {
+  const div = document.getElementById('trashRestoreDialog');
+  if (div) div.remove();
+}
+
+async function doRestoreProject(name) {
+  closeTrashRestoreDialog();
+  const res = await fetch(`/api/projects/${encodeURIComponent(name)}/restore`, { method: 'POST' });
+  if (!res.ok) {
+    const data = await res.json();
+    showToast('❌ ' + (data.detail || '恢复失败'));
+    return;
+  }
+  const data = await res.json();
+  currentProject = name;
+  el('projectName').textContent = name;
+  el('msgList').innerHTML = `<div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">已恢复项目：${escHtml(name)}</div>`;
+  selection = {}; updateRecipientSummary();
+  allSkills = [];
+  renderAgents(data.agents || []);
+  if (!allProjects.includes(name)) allProjects.push(name);
+  renderProjectDropdown();
+  showToast(`项目 "${name}" 已恢复`);
+  _reconnectForProject(name);
+}
+
+async function doStartFreshProject(name) {
+  closeTrashRestoreDialog();
+  // Permanently delete the trashed project first
+  const discardRes = await fetch(`/api/projects/${encodeURIComponent(name)}/discard-trash`, { method: 'POST' });
+  if (!discardRes.ok) {
+    showToast('❌ 清空回收站数据失败');
+    return;
+  }
+  // Create a fresh project
+  const res = await fetch('/api/projects', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({name})
+  });
+  const data = await res.json();
+  if (!res.ok) { showToast('❌ ' + (data.detail||'创建失败')); return; }
+  currentProject = name;
+  el('projectName').textContent = name;
+  el('msgList').innerHTML = `<div style="color:var(--muted);font-size:13px;text-align:center;margin-top:40px;">新项目已创建，和 orchestrator 对话来组建团队</div>`;
+  selection = {}; updateRecipientSummary();
+  allSkills = [];
+  pendingImages = []; renderImagePreviews();
+  allProjects.push(name);
+  renderProjectDropdown();
   showToast(`项目 "${name}" 已创建`);
   _reconnectForProject(name);
 }
