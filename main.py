@@ -59,7 +59,7 @@ from core import skill_store
 from core import summarizer as summarizer_mod
 from core import tool_registry
 from core.tools.categories.platform_runtime import dismiss_member, recruit_fixed
-from core.tools.categories import team_runtime
+from core.tools.categories import files_runtime, shell_runtime, team_runtime
 from core.heartbeat import HeartbeatScheduler
 from core.red_actions import check_confirm
 from core.question_store import QuestionStore
@@ -560,6 +560,9 @@ def get_agent_effective_prompt(name: str):
         raise HTTPException(status_code=404, detail=f"agent '{name}' not found")
     role = cfg.get("role", "member")
     is_temp = cfg.get("is_temp", False)
+    # Normalize legacy / LLM-hallucinated role values so tool list is never empty.
+    _known_roles = {"member", "orchestrator", "temp"}
+    tool_role = role if role in _known_roles else "member"
     return {
         "name": name,
         "role": role,
@@ -570,7 +573,7 @@ def get_agent_effective_prompt(name: str):
             "_effective_instructions",
             cfg.get("instructions", ""),
         ),
-        "available_tools": get_tools_for_role(role, is_temp),
+        "available_tools": get_tools_for_role(tool_role, is_temp),
     }
 
 
@@ -1093,7 +1096,7 @@ async def _execute_tool(
     except TypeError as exc:
         if tool_name in {"web_search", "web_read"}:
             return f"工具调用参数错误（{tool_name}）：{exc}"
-        if tool_name in team_runtime.TEAM_TOOL_DISPATCH:
+        if tool_name in team_runtime.TEAM_TOOL_DISPATCH or tool_name in files_runtime.FILES_TOOL_DISPATCH or tool_name in shell_runtime.SHELL_TOOL_DISPATCH:
             return (
                 f"工具调用参数错误（{tool_name}）：{exc}。请检查必填字段并重试。\n"
                 "建议立即调用 list_tasks(scope='mine') 查看当前任务实际状态，避免基于错误假设继续推进。"
@@ -1103,7 +1106,7 @@ async def _execute_tool(
         if tool_name in {"web_search", "web_read"}:
             logger.exception("%s execution error", tool_name)
             return f"工具调用异常（{tool_name}）：{exc}"
-        if tool_name in team_runtime.TEAM_TOOL_DISPATCH:
+        if tool_name in team_runtime.TEAM_TOOL_DISPATCH or tool_name in files_runtime.FILES_TOOL_DISPATCH or tool_name in shell_runtime.SHELL_TOOL_DISPATCH:
             return (
                 f"工具调用异常（{tool_name}）：{exc}\n"
                 "建议立即调用 list_tasks(scope='mine') 查看当前任务实际状态，避免基于错误假设继续推进。"

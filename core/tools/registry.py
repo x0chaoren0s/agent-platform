@@ -141,6 +141,10 @@ _REQUIRED_TOOL_NAMES: frozenset[str] = frozenset(
         "give_up",
         "load_skill",
         "list_files",
+        "read_file",
+        "write_file",
+        "grep",
+        "glob_file_search",
         "list_team",
         "recruit_fixed",
         "dismiss_member",
@@ -150,6 +154,7 @@ _REQUIRED_TOOL_NAMES: frozenset[str] = frozenset(
         "web_read",
         "kb_write",
         "kb_search",
+        "run_shell",
     }
 )
 

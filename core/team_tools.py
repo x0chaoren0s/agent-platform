@@ -1,7 +1,8 @@
-"""Deprecated compatibility: import from core.tools.categories.team_runtime instead."""
+"""Deprecated compatibility: team APIs from team_runtime; list_files from files_runtime."""
 
 from __future__ import annotations
 
+from .tools.categories.files_runtime import list_files
 from .tools.categories.team_runtime import (
     TEAM_TOOL_DISPATCH,
     _get_task_store,
@@ -9,7 +10,6 @@ from .tools.categories.team_runtime import (
     ask_user,
     get_project_dir,
     give_up,
-    list_files,
     list_tasks,
     load_skill,
     send_message,

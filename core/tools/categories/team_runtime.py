@@ -20,7 +20,6 @@ _QUESTION_STORES: dict[str, QuestionStore] = {}
 _ROUTERS: dict[str, Any] = {}
 _THREAD_PROJECT_DIR: dict[str, str] = {}
 _BROADCASTER: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
-_LIST_FILES_MAX_ROWS = 200
 
 
 def _safe_workspace_path(project_dir: str, raw_path: str | None) -> Path:
@@ -502,67 +501,6 @@ async def load_skill(
     return skill_store.load_for_agent(project_dir=project_dir, agent_name=caller_agent, skill_name=name)
 
 
-async def list_files(
-    project_dir: str,
-    thread_id: str,
-    caller_agent: str,
-    *,
-    path: str = ".",
-    max_depth: int = 2,
-    include_hidden: bool = False,
-) -> str:
-    _ = thread_id, caller_agent
-    try:
-        root = _safe_workspace_path(project_dir, path)
-    except ValueError as exc:
-        return f"错误：{exc}"
-    if not root.exists():
-        return f"错误：路径不存在：{path}"
-    if not root.is_dir():
-        return f"错误：不是目录：{path}"
-    try:
-        depth_limit = max(0, min(int(max_depth), 8))
-    except Exception:
-        depth_limit = 2
-    base = Path(project_dir).resolve()
-    rows: list[str] = []
-
-    def _is_hidden(name: str) -> bool:
-        return name.startswith(".")
-
-    def _walk(cur: Path, depth: int) -> None:
-        if len(rows) >= _LIST_FILES_MAX_ROWS:
-            return
-        try:
-            entries = sorted(cur.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-        except Exception:
-            return
-        for entry in entries:
-            if not include_hidden and _is_hidden(entry.name):
-                continue
-            try:
-                rel = entry.resolve().relative_to(base)
-            except Exception:
-                continue
-            label = str(rel).replace(os.sep, "/")
-            if entry.is_dir():
-                rows.append(f"[D] {label}/")
-                if depth < depth_limit:
-                    _walk(entry, depth + 1)
-            else:
-                rows.append(f"[F] {label}")
-            if len(rows) >= _LIST_FILES_MAX_ROWS:
-                return
-
-    _walk(root, 0)
-    if not rows:
-        return "（目录为空）"
-    body = "\n".join(rows)
-    if len(rows) >= _LIST_FILES_MAX_ROWS:
-        body += f"\n...（仅展示前 {_LIST_FILES_MAX_ROWS} 条）"
-    return body
-
-
 TEAM_TOOL_DISPATCH: dict[str, Callable[..., Awaitable[str]]] = {
     "assign_task": assign_task,
     "update_task": update_task,
@@ -572,6 +510,5 @@ TEAM_TOOL_DISPATCH: dict[str, Callable[..., Awaitable[str]]] = {
     "ask_user": ask_user,
     "give_up": give_up,
     "load_skill": load_skill,
-    "list_files": list_files,
 }
 

@@ -102,11 +102,3 @@ class LoadSkillTool(TeamDispatchTool):
     tool_roles = frozenset({"member", "temp"})
     tool_signature = "load_skill(name*)"
 
-
-class ListFilesTool(TeamDispatchTool):
-    ABSTRACT_TOOL = False
-    tool_name = "list_files"
-    tool_desc = "列出工作区目录文件列表"
-    tool_roles = frozenset({"member", "orchestrator", "temp"})
-    tool_signature = "list_files(path?, max_depth?, include_hidden?)"
-
