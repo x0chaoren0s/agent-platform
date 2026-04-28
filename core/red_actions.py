@@ -16,6 +16,13 @@ def marker_for_action(tool_name: str, args: dict) -> str | None:
         return f"[[confirm:recruit:{target}]]" if target else None
     if tool_name == "update_project_context":
         return "[[confirm:context:rewrite]]"
+    if tool_name == "write_file":
+        p = str(args.get("path", "")).strip().replace("\\", "/")
+        if not p:
+            return None
+        if p == "workspace" or p.startswith("workspace/"):
+            return None
+        return f"[[confirm:write_file:{p}]]"
     return None
 
 
@@ -26,6 +33,8 @@ def _action_label(tool_name: str) -> str:
         return "recruit"
     if tool_name == "update_project_context":
         return "context"
+    if tool_name == "write_file":
+        return "write_file"
     return tool_name
 
 
