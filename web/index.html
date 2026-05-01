@@ -1649,9 +1649,15 @@ function renderQuestionCard(question) {
   const optHtml = (question.options || []).map(o =>
     `<button onclick="answerQuestion('${question.id}','${o.id}')">${escHtml(o.label || o.id)}</button>`
   ).join('');
+  const hasOpts = (question.options || []).length > 0;
+  const customHtml = `<div style="display:flex;gap:6px;margin-top:8px;">
+    <input type="text" id="q-input-${question.id}" placeholder="或输入自定义回答…" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg);color:var(--fg);" onkeydown="if(event.key==='Enter'){const v=this.value.trim();if(v){answerQuestion('${question.id}',v);this.value='';}}">
+    <button onclick="const i=document.getElementById('q-input-${question.id}');const v=i.value.trim();if(v){answerQuestion('${question.id}',v);i.value='';}" style="padding:6px 12px;font-size:13px;white-space:nowrap;">发送</button>
+  </div>`;
   return `<div class="q-card" id="q-card-${question.id}">
     <div>❓ ${escHtml(question.question || '')}</div>
     <div class="q-options">${optHtml || `<textarea id="q-input-${question.id}" placeholder="输入回答"></textarea><button onclick="answerQuestion('${question.id}', document.getElementById('q-input-${question.id}').value)">提交</button>`}</div>
+    ${hasOpts ? customHtml : ''}
   </div>`;
 }
 

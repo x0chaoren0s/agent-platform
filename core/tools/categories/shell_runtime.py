@@ -13,7 +13,8 @@ _MAX_OUTPUT_CHARS = 32_000
 
 def _safe_cwd(project_dir: str, cwd: str | None) -> Path:
     base = Path(project_dir).resolve()
-    if not cwd:
+    if not cwd or cwd.strip().startswith("/home/"):
+        # Default to workspace; also catch LLM default paths like /home/user/repo
         workspace = base / "workspace"
         workspace.mkdir(parents=True, exist_ok=True)
         return workspace

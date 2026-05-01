@@ -102,6 +102,18 @@ class MessageRouter:
       per LLM call; older messages are replaced by a rolling summary.
     """
 
+    # Token budget controls (deepseek-v4-pro = ~1M context)
+    MODEL_MAX_TOKENS: int = 1_000_000
+    TOKEN_BUDGET_RATIO: float = 0.35      # inbox budget: 35% of model max; rest for system prompt + summary
+    MAX_TOOL_RESULT_CHARS: int = 5_000     # per-result truncation limit
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Rough token count for mixed Chinese/English text (~0.75 tok/char)."""
+        if not text:
+            return 0
+        return max(1, len(text) * 3 // 4)
+
     def __init__(
         self,
         registry: AgentRegistry,
@@ -204,15 +216,23 @@ class MessageRouter:
         return mentions
 
     def _inbox_for(self, agent_name: str) -> list[Envelope]:
-        """Filter global log to only messages this agent should see, capped at max_inbox_messages."""
+        """Filter global log to only messages this agent should see, capped by token budget."""
         full = [
             env
             for env in self._global_log
             if agent_name in env.recipients() or env.sender == agent_name
         ]
-        if len(full) > self._max_inbox_messages:
-            return full[-self._max_inbox_messages:]
-        return full
+        budget = int(self.MODEL_MAX_TOKENS * self.TOKEN_BUDGET_RATIO)
+        kept: list[Envelope] = []
+        used = 0
+        for env in reversed(full):
+            est = self._estimate_tokens(env.content or "") + 20  # +20 for metadata
+            if used + est > budget:
+                break
+            kept.append(env)
+            used += est
+        kept.reverse()
+        return kept
 
     def _build_prompt_for(self, agent_name: str, new_envelope: Envelope) -> str:
         """Build text-only prompt string (used when no images)."""
@@ -475,6 +495,11 @@ class MessageRouter:
         handoff_gap_rounds = 0
 
         while True:
+            # Trim SQLite agent history before it exceeds model context
+            self._trim_sqlite_history(agent_name)
+            # Proactive summarization: compress before token budget is exceeded
+            if self._needs_token_based_summary(agent_name):
+                await self.do_rolling_summary()
             run_input = self._build_run_input(agent_name, current_envelope)
             full_reply: list[str] = []
             try:
@@ -552,7 +577,13 @@ class MessageRouter:
                         "agent": agent_name,
                         "results": formatted_results,
                     }
-                    if auto_continue_rounds < max_auto_continue_rounds:
+                    # ask_user is a blocking operation — agent must wait for user answer
+                    has_ask_user = any(
+                        (item.get("tool") or "") == "ask_user" for item in tool_results
+                    )
+                    if has_ask_user:
+                        self.record_tool_feedback(agent_name, tool_results)
+                    elif auto_continue_rounds < max_auto_continue_rounds:
                         feedback_env = self.record_tool_feedback(agent_name, tool_results)
                         if feedback_env:
                             current_envelope = Envelope.from_dict(feedback_env)
@@ -657,7 +688,18 @@ class MessageRouter:
         """
         if not tool_results or not (triggered_by or "").strip():
             return None
-        lines = [f"【{tr['tool']}】{tr['result']}" for tr in tool_results]
+        lines: list[str] = []
+        for tr in tool_results:
+            result = str(tr.get("result", ""))
+            tool_name = str(tr.get("tool", ""))
+            if len(result) > self.MAX_TOOL_RESULT_CHARS:
+                total = len(result)
+                result = (
+                    result[:self.MAX_TOOL_RESULT_CHARS]
+                    + f"\n\n⚠️ 结果过长（{total} 字符），已截断至前 {self.MAX_TOOL_RESULT_CHARS} 字符。"
+                    f"如需完整内容，请用 {tool_name} 重新读取指定片段。"
+                )
+            lines.append(f"【{tool_name}】{result}")
         content = "【工具执行结果】\n" + "\n".join(lines)
         structured = [
             {
@@ -711,8 +753,38 @@ class MessageRouter:
         return [env.to_dict() for env in self._global_log[-n:]]
 
     def needs_summarization(self) -> bool:
-        """True when global log is large enough to warrant rolling summary."""
-        return len(self._global_log) > int(self._max_inbox_messages * 1.5)
+        """True when global log is large enough to warrant rolling summary (message-count fallback)."""
+        return len(self._global_log) > int(self._max_inbox_messages * 0.8)
+
+    def _needs_token_based_summary(self, agent_name: str) -> bool:
+        """Check if agent's estimated inbox tokens exceed budget before an LLM call."""
+        inbox = self._inbox_for(agent_name)
+        total_est = sum(self._estimate_tokens(e.content or "") + 20 for e in inbox)
+        summary_est = self._estimate_tokens(self._inbox_summary.get(agent_name, ""))
+        threshold = int(self.MODEL_MAX_TOKENS * self.TOKEN_BUDGET_RATIO)
+        return (total_est + summary_est) > threshold
+
+    def _trim_sqlite_history(self, agent_name: str, max_rows: int = 20) -> None:
+        """Limit per-agent SQLite history rows so context stays under model limit."""
+        if self._log_path is None:
+            return
+        db_path = self._log_path.parent.parent / "memory" / "long_term.db"
+        if not db_path.exists():
+            return
+        try:
+            import sqlite3
+            db = sqlite3.connect(str(db_path))
+            table = f"history_{agent_name}"
+            cnt = db.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()
+            if cnt and cnt[0] > max_rows:
+                last = db.execute(f'SELECT rowid FROM "{table}" ORDER BY rowid DESC LIMIT ?', (max_rows,)).fetchall()
+                if last:
+                    min_id = min(r[0] for r in last)
+                    db.execute(f'DELETE FROM "{table}" WHERE rowid < ?', (min_id,))
+                    db.commit()
+            db.close()
+        except Exception:
+            pass  # table may not exist yet or agent name mismatch
 
     async def do_rolling_summary(self) -> None:
         """

@@ -455,7 +455,7 @@ async def ask_user(
         )
     )
     await _emit(thread_id, {"type": "user_question", "question": created.__dict__})
-    return f"已向用户提问 {created.id}"
+    return f"已向用户提问 {created.id}（等待回复中，收到回答前请勿继续操作）"
 
 
 async def give_up(
