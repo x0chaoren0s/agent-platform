@@ -24,6 +24,11 @@ def get_agent_skills(agent_name: str) -> list[str]:
     return _AGENT_SKILL_MAP.get(agent_name, [])
 
 
+def has_agent_skills(agent_name: str) -> bool:
+    """Return True if *agent_name* has been seeded (even if empty)."""
+    return agent_name in _AGENT_SKILL_MAP
+
+
 def set_agent_skills(agent_name: str, skills: list[str]) -> None:
     """Set the skills for *agent_name* to *skills*."""
     _AGENT_SKILL_MAP[agent_name] = skills

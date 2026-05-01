@@ -34,7 +34,7 @@ from agent_framework._types import Content
 from .capability_table import CapabilityTable
 from .registry import AgentRegistry
 from .session_store import SessionStore
-from .skill_index_provider import set_agent_skills, get_agent_skills
+from .skill_index_provider import set_agent_skills, get_agent_skills, has_agent_skills
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +188,8 @@ class MessageRouter:
 
     def seed_agent_skills_from_yaml(self, agent_name: str) -> None:
         """Initialize runtime skill state from YAML config (only if not already set)."""
-        if get_agent_skills(agent_name):
-            return  # already seeded
+        if has_agent_skills(agent_name):
+            return  # already seeded (even if empty)
         cfg = self._registry.get_config(agent_name)
         if cfg is None:
             return
