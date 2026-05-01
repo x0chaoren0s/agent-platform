@@ -814,6 +814,7 @@ function renderConversations(convs) {
         <div class="conv-actions">
           <button class="conv-act-btn" title="检查点" onclick="toggleCheckpoints('${c.thread_id}',event)">📌</button>
           <button class="conv-act-btn" title="重命名" onclick="renameConversation('${c.thread_id}','${escHtml(c.name)}',event)">✎</button>
+          <button class="conv-act-btn" title="AI 重命名" onclick="autoRenameConversation('${c.thread_id}',event)">🤖</button>
           <button class="conv-act-btn del" title="删除" onclick="deleteConversation('${c.thread_id}',event)">✕</button>
         </div>
       </div>
@@ -882,6 +883,24 @@ async function renameConversation(thread_id, oldName, evt) {
   if (conv) conv.name = newName.trim();
   renderConversations(allConversations);
   showToast('已重命名');
+}
+
+async function autoRenameConversation(thread_id, evt) {
+  if (evt) evt.stopPropagation();
+  try {
+    const res = await fetch(`/api/conversations/${encodeURIComponent(thread_id)}/auto-name`, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      const conv = allConversations.find(c => c.thread_id === thread_id);
+      if (conv) conv.name = data.name;
+      renderConversations(allConversations);
+      showToast('已重命名为：' + data.name);
+    } else {
+      showToast(data.detail || 'AI 命名失败');
+    }
+  } catch (e) {
+    showToast('请求失败');
+  }
 }
 
 // ── Checkpoint UI ────────────────────────────────────────────────────────────
@@ -2188,6 +2207,14 @@ function connect() {
     if (ev.type === 'thread_paused') {
       threadPaused = Boolean(ev.is_paused);
       renderThreadPauseState();
+      return;
+    }
+    if (ev.type === 'conversation_renamed') {
+      const conv = allConversations.find(c => c.thread_id === ev.thread_id);
+      if (conv) {
+        conv.name = ev.name;
+        renderConversations(allConversations);
+      }
       return;
     }
     if (ev.type === 'heartbeat') {
