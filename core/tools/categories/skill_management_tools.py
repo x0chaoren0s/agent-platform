@@ -10,6 +10,8 @@ from .skill_management_runtime import (
     list_proposals,
     create_skill,
     update_skill,
+    mount_skill,
+    unmount_skill,
 )
 
 
@@ -200,6 +202,68 @@ class UpdateSkillTool(BaseTool):
 
     async def run(self, args: dict, ctx: ToolContext) -> str:
         return await update_skill(
+            project_dir=str(ctx.project_dir),
+            thread_id=ctx.thread_id,
+            caller_agent=ctx.caller_agent,
+            **args,
+        )
+
+
+class MountSkillTool(BaseTool):
+    name = "mount_skill"
+    roles = frozenset({"member", "orchestrator", "temp"})
+    is_red = False
+    desc = "运行时挂载 Skill（仅本次对话有效，不写入 YAML）"
+    signature = "mount_skill(name*, agent?)"
+    args_schema = {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "技能标识符（通过 list_skills 查询）",
+            },
+            "agent": {
+                "type": "string",
+                "description": "目标成员名（可选，仅 orchestrator 可给其他成员挂载）",
+            },
+        },
+        "required": ["name"],
+    }
+    output_schema = {"type": "string"}
+
+    async def run(self, args: dict, ctx: ToolContext) -> str:
+        return await mount_skill(
+            project_dir=str(ctx.project_dir),
+            thread_id=ctx.thread_id,
+            caller_agent=ctx.caller_agent,
+            **args,
+        )
+
+
+class UnmountSkillTool(BaseTool):
+    name = "unmount_skill"
+    roles = frozenset({"member", "orchestrator", "temp"})
+    is_red = False
+    desc = "运行时卸载 Skill（仅本次对话有效，不写入 YAML）"
+    signature = "unmount_skill(name*, agent?)"
+    args_schema = {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "技能标识符",
+            },
+            "agent": {
+                "type": "string",
+                "description": "目标成员名（可选，仅 orchestrator 可卸载其他成员的 skill）",
+            },
+        },
+        "required": ["name"],
+    }
+    output_schema = {"type": "string"}
+
+    async def run(self, args: dict, ctx: ToolContext) -> str:
+        return await unmount_skill(
             project_dir=str(ctx.project_dir),
             thread_id=ctx.thread_id,
             caller_agent=ctx.caller_agent,

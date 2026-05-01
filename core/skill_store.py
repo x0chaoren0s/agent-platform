@@ -147,7 +147,13 @@ def build_skill_index(project_dir: str | Path, agent_skills: list[str]) -> str:
 
 
 def load_for_agent(project_dir: str | Path, agent_name: str, skill_name: str) -> str:
-    allowed = read_agent_skills(project_dir, agent_name)
+    # Check runtime-mounted skills first, fall back to YAML-defined skills
+    try:
+        from .skill_index_provider import get_agent_skills
+        runtime_skills = get_agent_skills(agent_name)
+        allowed = runtime_skills if runtime_skills else read_agent_skills(project_dir, agent_name)
+    except Exception:
+        allowed = read_agent_skills(project_dir, agent_name)
     if skill_name not in allowed:
         allowed_text = ", ".join(allowed) if allowed else "无"
         return f"错误：未给 {agent_name} 挂载 skill: {skill_name}。已挂载: {allowed_text}"

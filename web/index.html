@@ -1736,7 +1736,7 @@ function renderAgentInspector(name, data) {
   el('inspRole').textContent = data.is_temp ? 'temp' : (data.role || 'member');
   const mounted = Array.isArray(data.skills) ? data.skills : [];
   const mountedSet = new Set(mounted);
-  const canEditSkills = data.role !== 'orchestrator' && !data.is_temp;
+  const canEditSkills = !data.is_temp;
   const skillsHtml = allSkills.length
     ? allSkills.map(s => {
       const sid = String(s.id || '').trim();
@@ -1766,7 +1766,7 @@ function renderAgentInspector(name, data) {
     : '<div style="color:var(--muted);font-size:12px">无可用工具</div>';
   const promptRaw = data.raw_instructions || '（无）';
   const promptFull = data.effective_instructions || '（无）';
-  const skillHint = canEditSkills ? '' : '<div style="font-size:11px;color:var(--muted);margin-top:6px">orchestrator/临时成员不支持修改 skills</div>';
+  const skillHint = canEditSkills ? '' : '<div style="font-size:11px;color:var(--muted);margin-top:6px">临时成员不支持修改 skills</div>';
   el('inspBody').innerHTML = `
     <div>
       <div class="insp-section-title">可用 Skills (${allSkills.length}) / 已挂载 (${mounted.length})</div>
@@ -1810,8 +1810,8 @@ function closeAgentInspector() {
 async function toggleSkill(agentName, skillId) {
   const cache = inspectorCache[agentName];
   if (!cache) return;
-  if (cache.role === 'orchestrator' || cache.is_temp) {
-    showToast('当前成员不支持修改 skills');
+  if (cache.is_temp) {
+    showToast('临时成员不支持修改 skills');
     return;
   }
   const mounted = Array.isArray(cache.skills) ? [...cache.skills] : [];

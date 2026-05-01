@@ -868,8 +868,6 @@ def update_agent_skills(name: str, req: UpdateAgentSkillsRequest):
     cfg = _registry.get_config(name) if _registry is not None else None
     if cfg is None and _registry is not None:
         cfg = _registry.get_config(safe_name)
-    if cfg is not None and cfg.get("role") == "orchestrator":
-        raise HTTPException(status_code=400, detail="不允许修改 orchestrator skills")
 
     clean_skills = sorted({str(item).strip() for item in req.skills if str(item).strip()})
     available = {item["id"] for item in list_skills().get("skills", [])}

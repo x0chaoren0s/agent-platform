@@ -12,6 +12,7 @@ import yaml
 
 from core.skill_proposals import SkillProposal, SkillProposalStore
 from core import skill_store
+from .team_runtime import _ROUTERS, _orchestrator_name
 
 logger = logging.getLogger(__name__)
 
@@ -521,6 +522,84 @@ async def update_skill(
 
 
 # ---------------------------------------------------------------------------
+# Public API: mount_skill
+# ---------------------------------------------------------------------------
+
+
+async def mount_skill(
+    project_dir: str,
+    thread_id: str,
+    caller_agent: str,
+    *,
+    name: str,
+    agent: str | None = None,
+) -> str:
+    """Mount a skill to an agent (session-level, not persisted to YAML).
+
+    If *agent* is omitted, mounts to the caller.
+    Only orchestrator can mount skills to other agents.
+    """
+    target = (agent or caller_agent).strip()
+    if not target:
+        return "错误：agent 名不能为空。"
+    if agent and caller_agent != _orchestrator_name(Path(project_dir)):
+        return "错误：只有 orchestrator 可以给其他成员挂载 skill。"
+
+    name = name.strip()
+    if not name:
+        return "错误：skill_name 不能为空。"
+
+    # Validate the skill exists
+    from core.skill_store import read_skill
+
+    pdir = Path(project_dir)
+    parsed = read_skill(pdir, name)
+    if parsed is None:
+        return f"错误：未找到 skill「{name}」。请先使用 list_skills 确认名称。"
+
+    router = _ROUTERS.get(thread_id)
+    if router is None or not hasattr(router, "mount_skill"):
+        return "错误：当前会话未找到路由器，无法挂载 skill。"
+
+    return router.mount_skill(target, name)
+
+
+# ---------------------------------------------------------------------------
+# Public API: unmount_skill
+# ---------------------------------------------------------------------------
+
+
+async def unmount_skill(
+    project_dir: str,
+    thread_id: str,
+    caller_agent: str,
+    *,
+    name: str,
+    agent: str | None = None,
+) -> str:
+    """Unmount a skill from an agent (session-level, not persisted to YAML).
+
+    If *agent* is omitted, unmounts from the caller.
+    Only orchestrator can unmount skills from other agents.
+    """
+    target = (agent or caller_agent).strip()
+    if not target:
+        return "错误：agent 名不能为空。"
+    if agent and caller_agent != _orchestrator_name(Path(project_dir)):
+        return "错误：只有 orchestrator 可以卸载其他成员的 skill。"
+
+    name = name.strip()
+    if not name:
+        return "错误：skill_name 不能为空。"
+
+    router = _ROUTERS.get(thread_id)
+    if router is None or not hasattr(router, "unmount_skill"):
+        return "错误：当前会话未找到路由器，无法卸载 skill。"
+
+    return router.unmount_skill(target, name)
+
+
+# ---------------------------------------------------------------------------
 # Dispatch table (for direct import by tool classes)
 # ---------------------------------------------------------------------------
 
@@ -530,4 +609,6 @@ SKILL_TOOL_DISPATCH: dict[str, Any] = {
     "list_proposals": list_proposals,
     "create_skill": create_skill,
     "update_skill": update_skill,
+    "mount_skill": mount_skill,
+    "unmount_skill": unmount_skill,
 }

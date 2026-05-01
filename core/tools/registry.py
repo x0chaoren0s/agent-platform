@@ -160,6 +160,8 @@ _REQUIRED_TOOL_NAMES: frozenset[str] = frozenset(
         "list_proposals",
         "create_skill",
         "update_skill",
+        "mount_skill",
+        "unmount_skill",
     }
 )
 
