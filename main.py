@@ -86,6 +86,7 @@ _routers: dict[str, MessageRouter] = {}
 _active_websockets: dict[str, WebSocket] = {}  # thread_id → active websocket
 _task_stores: dict[str, TaskStore] = {}
 _question_stores: dict[str, QuestionStore] = {}
+_auto_named: set[str] = set()  # thread_ids that have received first auto-name
 _heartbeat_scheduler: HeartbeatScheduler | None = None
 _skill_watcher: SkillWatcher | None = None
 
@@ -994,7 +995,30 @@ async def rename_conversation(thread_id: str, req: RenameConversationRequest):
     ok = await _conv_store.rename(thread_id, new_name)
     if not ok:
         raise HTTPException(status_code=404, detail="对话不存在")
+    await _conv_store.set_auto_rename(thread_id, False)
     return {"ok": True, "thread_id": thread_id, "name": new_name}
+
+
+@app.post("/api/conversations/{thread_id}/auto-name")
+async def auto_rename_conversation(thread_id: str):
+    """Manually trigger AI auto-naming for a conversation."""
+    if _conv_store is None:
+        raise HTTPException(status_code=503, detail="ConversationStore not initialized")
+    router = _routers.get(thread_id)
+    if router is None:
+        raise HTTPException(status_code=404, detail="对话不存在或未激活")
+    envelopes = router.get_recent_envelopes(20)
+    name = await summarizer_mod.auto_name_conversation(envelopes)
+    if not name:
+        raise HTTPException(status_code=502, detail="AI 命名生成失败，请稍后重试")
+    await _conv_store.rename(thread_id, name)
+    # Manual AI rename does NOT change auto_rename flag
+    await _ws_broadcast(thread_id, {
+        "type": "conversation_renamed",
+        "thread_id": thread_id,
+        "name": name,
+    })
+    return {"ok": True, "name": name}
 
 
 @app.delete("/api/conversations/{thread_id}")
@@ -1651,6 +1675,9 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
                 elif event.get("type") == "agent_done":
                     agent_name = event.get("agent", "")
                     full_reply_by_agent.pop(agent_name, None)
+                    # Trigger first auto-name when enough messages
+                    if _conv_store and _should_auto_name(thread_id, router):
+                        asyncio.create_task(_auto_name_conversation(thread_id))
 
                 elif event.get("type") == "tool_results":
                     results = event.get("results", [])
@@ -1685,6 +1712,50 @@ async def websocket_chat(websocket: WebSocket, thread_id: str):
             await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
         except Exception:
             pass
+
+
+def _should_auto_name(thread_id: str, router: MessageRouter) -> bool:
+    """Check if a conversation should receive its first auto-name."""
+    if thread_id in _auto_named:
+        return False
+    log = router.get_global_log()
+    msg_count = sum(
+        1 for env in log
+        if env.get("sender", "") not in ("", "system", "platform")
+    )
+    if msg_count < 5:
+        return False
+    return True
+
+
+async def _auto_name_conversation(thread_id: str) -> None:
+    """Generate and apply an auto-name for a conversation, then broadcast."""
+    router = _routers.get(thread_id)
+    if router is None:
+        return
+    if thread_id in _auto_named:
+        return
+    _auto_named.add(thread_id)
+
+    if _conv_store is not None:
+        allowed = await _conv_store.get_auto_rename(thread_id)
+        if not allowed:
+            return
+
+    envelopes = router.get_recent_envelopes(20)
+    name = await summarizer_mod.auto_name_conversation(envelopes)
+    if not name:
+        return
+
+    if _conv_store is not None:
+        await _conv_store.rename(thread_id, name)
+
+    await _ws_broadcast(thread_id, {
+        "type": "conversation_renamed",
+        "thread_id": thread_id,
+        "name": name,
+    })
+    logger.info("Auto-named conversation %s → %s", thread_id, name)
 
 
 async def _on_conversation_disconnect(router: MessageRouter, pdir: Path) -> None:
