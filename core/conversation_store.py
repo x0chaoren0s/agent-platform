@@ -167,6 +167,17 @@ class ConversationStore:
             return False
         return bool(row[0])
 
+    async def rename_if_auto_rename_enabled(self, thread_id: str, new_name: str) -> bool:
+        """Rename only if auto_rename is still enabled. Returns True if renamed."""
+        await self._ensure_ready()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                f"UPDATE {_TABLE} SET name = ? WHERE thread_id = ? AND auto_rename = 1",
+                (new_name, thread_id),
+            )
+            await db.commit()
+            return db.total_changes > 0
+
     async def set_auto_rename(self, thread_id: str, enabled: bool) -> None:
         await self._ensure_ready()
         async with aiosqlite.connect(self._db_path) as db:

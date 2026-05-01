@@ -140,6 +140,7 @@ def _activate(name: str) -> None:
     _routers.clear()
     _task_stores.clear()
     _question_stores.clear()
+    _auto_named.clear()
     _registry = AgentRegistry(pdir)
     tool_registry.startup_consistency_check()
     _session_store = SessionStore(pdir / "sessions")
@@ -1012,6 +1013,7 @@ async def auto_rename_conversation(thread_id: str):
     if not name:
         raise HTTPException(status_code=502, detail="AI 命名生成失败，请稍后重试")
     await _conv_store.rename(thread_id, name)
+    _auto_named.add(thread_id)
     # Manual AI rename does NOT change auto_rename flag
     await _ws_broadcast(thread_id, {
         "type": "conversation_renamed",
@@ -1024,6 +1026,7 @@ async def auto_rename_conversation(thread_id: str):
 @app.delete("/api/conversations/{thread_id}")
 async def delete_conversation(thread_id: str):
     """Hard-delete a conversation: chat_log, session files, SQLite history rows, metadata."""
+    _auto_named.discard(thread_id)
     import aiosqlite as _aiosqlite
     if _conv_store is None:
         raise HTTPException(status_code=503, detail="ConversationStore not initialized")
@@ -1737,18 +1740,16 @@ async def _auto_name_conversation(thread_id: str) -> None:
         return
     _auto_named.add(thread_id)
 
-    if _conv_store is not None:
-        allowed = await _conv_store.get_auto_rename(thread_id)
-        if not allowed:
-            return
-
     envelopes = router.get_recent_envelopes(20)
     name = await summarizer_mod.auto_name_conversation(envelopes)
     if not name:
         return
 
     if _conv_store is not None:
-        await _conv_store.rename(thread_id, name)
+        renamed = await _conv_store.rename_if_auto_rename_enabled(thread_id, name)
+        if not renamed:
+            logger.info("Auto-rename skipped for %s: auto_rename was disabled", thread_id)
+            return
 
     await _ws_broadcast(thread_id, {
         "type": "conversation_renamed",
