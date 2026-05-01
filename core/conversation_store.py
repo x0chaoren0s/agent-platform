@@ -68,6 +68,12 @@ class ConversationStore:
                 )
             except aiosqlite.OperationalError:
                 pass
+            try:
+                await db.execute(
+                    f"ALTER TABLE {_TABLE} ADD COLUMN auto_rename INTEGER NOT NULL DEFAULT 1"
+                )
+            except aiosqlite.OperationalError:
+                pass
             await db.commit()
         logger.debug("ConversationStore initialized at %s", self._db_path)
 
@@ -159,4 +165,25 @@ class ConversationStore:
                 row = await cur.fetchone()
         if not row:
             return False
+        return bool(row[0])
+
+    async def set_auto_rename(self, thread_id: str, enabled: bool) -> None:
+        await self._ensure_ready()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                f"UPDATE {_TABLE} SET auto_rename = ? WHERE thread_id = ?",
+                (1 if enabled else 0, thread_id),
+            )
+            await db.commit()
+
+    async def get_auto_rename(self, thread_id: str) -> bool:
+        await self._ensure_ready()
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                f"SELECT auto_rename FROM {_TABLE} WHERE thread_id = ?",
+                (thread_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        if row is None:
+            return True  # default for non-existent/legacy rows
         return bool(row[0])
