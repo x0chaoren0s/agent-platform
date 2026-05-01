@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from .question_store import QuestionStore
 
-RED_ACTIONS = {"dismiss_member", "recruit_fixed", "update_project_context"}
+RED_ACTIONS = {"dismiss_member", "recruit_fixed", "update_project_context", "create_skill", "update_skill"}
 
 
 def marker_for_action(tool_name: str, args: dict) -> str | None:
@@ -23,6 +23,12 @@ def marker_for_action(tool_name: str, args: dict) -> str | None:
         if p == "workspace" or p.startswith("workspace/"):
             return None
         return f"[[confirm:write_file:{p}]]"
+    if tool_name == "create_skill":
+        name = str(args.get("skill_name", "")).strip()
+        return f"[[confirm:create_skill:{name}]]" if name else None
+    if tool_name == "update_skill":
+        name = str(args.get("skill_name", "")).strip()
+        return f"[[confirm:update_skill:{name}]]" if name else None
     return None
 
 
@@ -35,6 +41,10 @@ def _action_label(tool_name: str) -> str:
         return "context"
     if tool_name == "write_file":
         return "write_file"
+    if tool_name == "create_skill":
+        return "create_skill"
+    if tool_name == "update_skill":
+        return "update_skill"
     return tool_name
 
 

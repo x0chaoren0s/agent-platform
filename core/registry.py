@@ -229,6 +229,15 @@ class AgentRegistry:
                     return name
         return None
 
+    def get_agent_names_with_skill(self, skill_name: str) -> list[str]:
+        """Return names of all agents whose YAML config lists *skill_name*."""
+        with self._lock:
+            return [
+                name
+                for name, cfg in self._configs.items()
+                if isinstance(cfg.get("skills"), list) and skill_name in cfg["skills"]
+            ]
+
     def unregister(self, name: str) -> None:
         """Remove an agent from the registry (but does not delete YAML file)."""
         with self._lock:

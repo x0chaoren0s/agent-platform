@@ -155,6 +155,11 @@ _REQUIRED_TOOL_NAMES: frozenset[str] = frozenset(
         "kb_write",
         "kb_search",
         "run_shell",
+        "list_skills",
+        "propose_skill",
+        "list_proposals",
+        "create_skill",
+        "update_skill",
     }
 )
 

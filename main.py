@@ -58,6 +58,7 @@ from core import knowledge_base as kb_mod
 from core import skill_store
 from core import summarizer as summarizer_mod
 from core import tool_registry
+from core.skill_watcher import SkillWatcher
 from core.tools.categories.platform_runtime import dismiss_member, recruit_fixed
 from core.tools.categories import files_runtime, shell_runtime, team_runtime
 from core.heartbeat import HeartbeatScheduler
@@ -86,6 +87,7 @@ _active_websockets: dict[str, WebSocket] = {}  # thread_id → active websocket
 _task_stores: dict[str, TaskStore] = {}
 _question_stores: dict[str, QuestionStore] = {}
 _heartbeat_scheduler: HeartbeatScheduler | None = None
+_skill_watcher: SkillWatcher | None = None
 
 
 def _project_dir(name: str) -> Path:
@@ -125,12 +127,15 @@ def _trash_project_dir(name: str) -> Path:
 
 def _activate(name: str) -> None:
     """Switch to a different project (hot-reload registry)."""
-    global _current_project, _registry, _session_store, _conv_store, _checkpoint_store, _routers, _task_stores, _question_stores
+    global _current_project, _registry, _session_store, _conv_store, _checkpoint_store, _routers, _task_stores, _question_stores, _skill_watcher
     pdir = _project_dir(name)
     if not pdir.exists():
         raise FileNotFoundError(f"Project directory not found: {pdir}")
     if _registry is not None:
         _registry.stop_watching()
+    if _skill_watcher is not None:
+        _skill_watcher.stop()
+        _skill_watcher = None
     _routers.clear()
     _task_stores.clear()
     _question_stores.clear()
@@ -140,6 +145,7 @@ def _activate(name: str) -> None:
     _conv_store = ConversationStore(pdir / "memory" / "platform.db")
     _checkpoint_store = CheckpointStore(pdir / "memory" / "platform.db", pdir)
     _registry.start_watching()
+    _start_skill_watcher()
     team_runtime.set_broadcaster(_ws_broadcast)
     _current_project = name
     logger.info("Activated project '%s'  agents=%s", name, list(_registry.all().keys()))
@@ -252,6 +258,74 @@ async def _get_question_store(thread_id: str) -> QuestionStore:
 
 
 # ---------------------------------------------------------------------------
+# Skill file change detection
+# ---------------------------------------------------------------------------
+
+
+def _on_skill_changed(skill_name: str, event_type: str) -> None:
+    """Called by SkillWatcher when a SKILL.md is modified or deleted.
+
+    Injects a system advisory into every active router where an agent has
+    this skill mounted, and broadcasts a ``skill_updated`` event to the UI.
+    """
+    if _registry is None:
+        return
+
+    affected = _registry.get_agent_names_with_skill(skill_name)
+    if not affected:
+        logger.debug("Skill '%s' %s but no agent uses it", skill_name, event_type)
+        return
+
+    if event_type == "deleted":
+        message = (
+            f"【技能失效提醒】技能「{skill_name}」已被删除。"
+            f"如果你的当前任务依赖此技能，请通知 orchestrator 调整方案。"
+        )
+        title = "skill_deleted"
+    else:
+        message = (
+            f"【技能更新提醒】技能「{skill_name}」已被修改。"
+            f"如果你之前使用过该技能，建议重新调用 load_skill('{skill_name}') 获取最新版本。"
+        )
+        title = "skill_updated"
+
+    for tid, router in _routers.items():
+        for agent_name in affected:
+            router.record_system_advisory(
+                to_agent=agent_name,
+                text=message,
+                metadata={"skill_event": True, "skill_name": skill_name, "event_type": event_type},
+            )
+        asyncio.create_task(_ws_broadcast(tid, {
+            "type": title,
+            "skill_name": skill_name,
+            "event_type": event_type,
+            "affected_agents": affected,
+        }))
+
+    logger.info(
+        "Skill '%s' %s — notified %d agents across %d threads",
+        skill_name, event_type, len(affected), len(_routers),
+    )
+
+
+def _start_skill_watcher() -> None:
+    """Start watching system-level + project-level skill directories."""
+    global _skill_watcher
+    pdir = _project_dir(_current_project)
+    roots: list[Path] = []
+    sys_dir = skill_store._system_skills_dir()
+    if sys_dir.exists():
+        roots.append(sys_dir)
+    proj_dir = skill_store._skills_dir(pdir)
+    if proj_dir.exists():
+        roots.append(proj_dir)
+    roots.extend(skill_store._global_skill_roots())
+    _skill_watcher = SkillWatcher(roots, _on_skill_changed)
+    _skill_watcher.start()
+
+
+# ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
 
@@ -297,6 +371,8 @@ async def lifespan(app: FastAPI):
         _heartbeat_scheduler = None
     if _registry:
         _registry.stop_watching()
+    if _skill_watcher:
+        _skill_watcher.stop()
     logger.info("Agent platform stopped.")
 
 
@@ -405,13 +481,15 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
       ```
 
       【红色操作协议】（不可逆动作，必须先确认）
-      - 以下工具属于红色操作：dismiss_member、recruit_fixed、update_project_context。
+      - 以下工具属于红色操作：dismiss_member、recruit_fixed、update_project_context、create_skill、update_skill。
       - 调用上述工具前，必须先 ask_user 且 question 文本中包含确认标记（marker），并等待用户回答 "yes"。
       - 若未满足该条件，服务器会拒绝执行。
       - marker 规范：
         - dismiss_member: [[confirm:dismiss:成员名]]
         - recruit_fixed: [[confirm:recruit:成员名]]
         - update_project_context: [[confirm:context:rewrite]]
+        - create_skill: [[confirm:create_skill:技能名]]
+        - update_skill: [[confirm:update_skill:技能名]]
       - 若工具结果返回“缺少 confirm / 必须先 ask_user”之类错误，下一步必须先发 ask_user，不得重复直接调用红色工具。
 
       ```tool_call
@@ -422,6 +500,14 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
       ```
       ```tool_call
       {"tool": "ask_user", "args": {"question": "请确认是否覆盖项目背景 [[confirm:context:rewrite]]", "options": [{"id": "yes", "label": "确认"}, {"id": "no", "label": "取消"}], "urgency": "high"}}
+	      ```
+
+	      ```tool_call
+	      {"tool": "ask_user", "args": {"question": "建议创建 Skill「数据调研模板」scope=project [[confirm:create_skill:数据调研模板]]", "options": [{"id": "yes", "label": "同意创建"}, {"id": "no", "label": "暂不创建"}], "urgency": "high"}}
+	      ```
+	      ```tool_call
+	      {"tool": "ask_user", "args": {"question": "建议更新 Skill「web-research」scope=project [[confirm:update_skill:web-research]]", "options": [{"id": "yes", "label": "同意更新"}, {"id": "no", "label": "暂不更新"}], "urgency": "high"}}
+	      ```
       ```
 
       【协调升级路径（必须按顺序尝试，禁止跳步）】
@@ -676,6 +762,8 @@ class CreateAgentRequest(BaseModel):
     capabilities: list[str] = []
     instructions: str = "你是一个专业的助手，请尽力完成分配给你的任务。"
     max_history: int = 80
+    skills: list[str] = []
+    tools: list[str] = []
 
 
 class UpdateAgentSkillsRequest(BaseModel):
@@ -693,6 +781,8 @@ def create_agent(req: CreateAgentRequest):
         capabilities=req.capabilities,
         instructions=req.instructions,
         role=req.role,
+        skills=req.skills or None,
+        tools=req.tools or None,
     )
     if result.startswith("错误"):
         raise HTTPException(status_code=400, detail=result)
@@ -1248,6 +1338,21 @@ async def _execute_tool(
                 action="recruit",
                 name=str(args.get("name", "")),
             )
+        return result
+    elif tool_name == "create_skill":
+        if not result.startswith("错误：") and _registry is not None:
+            mount_to = args.get("mount_to", [])
+            if isinstance(mount_to, list):
+                for agent_name in mount_to:
+                    agent_name = str(agent_name).strip()
+                    if not agent_name:
+                        continue
+                    yaml_path = project_dir / "agents" / f"{agent_name}.yaml"
+                    if yaml_path.exists():
+                        try:
+                            _registry._load_file(yaml_path)
+                        except Exception:
+                            logger.exception("Failed to hot-reload agent after skill mount: %s", agent_name)
         return result
     elif tool_name == "dismiss_member":
         if not result.startswith("错误："):
