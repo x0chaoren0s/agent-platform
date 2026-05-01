@@ -152,3 +152,44 @@ async def consolidate_to_context(
             return ""
         logger.exception("consolidate_to_context failed")
         return ""
+
+
+_AUTO_NAME_SYSTEM = """\
+你是一个对话命名助手。根据以下对话内容，用 6-15 个字概括对话主题。
+直接输出名称，不要解释、不要加标点、不要加引号。
+"""
+
+
+async def auto_name_conversation(envelopes: list[dict]) -> str | None:
+    """Generate a concise Chinese name for a conversation based on its content.
+
+    Returns the generated name string, or None on failure.
+    """
+    if not envelopes:
+        return None
+    # Use first ~20 messages for naming
+    text = _envelopes_to_text(envelopes[:20])
+    if not text.strip():
+        return None
+    try:
+        client = _build_llm_client()
+        resp = await client.chat.completions.create(
+            model=_model(),
+            messages=[
+                {"role": "system", "content": _AUTO_NAME_SYSTEM},
+                {"role": "user", "content": f"对话内容：\n\n{text}"},
+            ],
+            temperature=0.3,
+            max_tokens=50,
+        )
+        name = (resp.choices[0].message.content or "").strip().strip('"').strip("'").strip()
+        if not name or len(name) > 30:
+            return None
+        return name
+    except Exception as exc:
+        err_text = str(exc).lower()
+        if "insufficient balance" in err_text or "error code: 402" in err_text:
+            logger.warning("auto_name_conversation skipped: model balance insufficient")
+            return None
+        logger.exception("auto_name_conversation failed")
+        return None
