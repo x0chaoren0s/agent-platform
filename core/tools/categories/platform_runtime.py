@@ -85,6 +85,8 @@ def recruit_fixed(
     capabilities: list[str],
     instructions: str,
     role: str = "member",
+    skills: list[str] | None = None,
+    tools: list[str] | None = None,
 ) -> str:
     try:
         name = _validate_name(name)
@@ -106,6 +108,10 @@ def recruit_fixed(
         "instructions": instructions,
         "max_history": 80,
     }
+    if skills is not None:
+        cfg["skills"] = sorted({str(s).strip() for s in skills if str(s).strip()})
+    if tools is not None:
+        cfg["tools"] = sorted({str(t).strip() for t in tools if str(t).strip()})
     with yaml_path.open("w", encoding="utf-8") as f:
         yaml.dump(cfg, f, allow_unicode=True, sort_keys=False)
     logger.info("Recruited fixed agent '%s' → %s", name, yaml_path)

@@ -33,8 +33,16 @@ class RecruitFixedTool(BaseTool):
     roles = frozenset({"orchestrator"})
     is_red = True
     desc = "招募固定成员（需确认）"
-    signature = "recruit_fixed(name*, description*, capabilities*, instructions*, role?)"
-    args_schema = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    signature = "recruit_fixed(name*, description*, capabilities*, instructions*, role?, skills?, tools?)"
+    args_schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "skills": {"type": "array", "items": {"type": "string"}},
+            "tools": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["name"],
+    }
     output_schema = {"type": "string"}
     examples = []
 
