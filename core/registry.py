@@ -38,7 +38,7 @@ from .member_protocol import (
     compose_member_instructions,
     compose_temp_instructions,
 )
-from .skill_store import build_skill_index
+from .skill_index_provider import SkillIndexProvider, set_agent_skills
 
 logger = logging.getLogger(__name__)
 
@@ -110,31 +110,15 @@ def _build_agent(
     instructions: str = cfg.get("instructions", "You are a helpful assistant.")
     max_history: int = cfg.get("max_history", 80)
     raw_role: str = cfg.get("role", "member")
-    # Normalize LLM-hallucinated or legacy role values: only "orchestrator" is special;
-    # everything else (including Chinese variants like "固定成员") maps to "member".
     role: str = raw_role if raw_role == "orchestrator" else "member"
     is_temp: bool = cfg.get("is_temp", False)
     effective_instructions = instructions
-    if role == "member":
-        if is_temp:
-            effective_instructions = compose_temp_instructions(instructions)
-        else:
-            effective_instructions = compose_member_instructions(instructions)
-            if project_dir is not None:
-                raw_skills = cfg.get("skills", [])
-                agent_skills = (
-                    [str(item).strip() for item in raw_skills if str(item).strip()]
-                    if isinstance(raw_skills, list)
-                    else []
-                )
-                skill_index = build_skill_index(project_dir, agent_skills)
-                if skill_index:
-                    effective_instructions = (
-                        f"{effective_instructions}\n\n{skill_index}"
-                    )
-    else:
-        # Orchestrator and other roles should also inherit global behavior guardrails.
+    if is_temp:
+        effective_instructions = compose_temp_instructions(instructions)
+    elif role == "orchestrator":
         effective_instructions = compose_base_instructions(instructions)
+    else:
+        effective_instructions = compose_member_instructions(instructions)
     cfg["_effective_instructions"] = effective_instructions
 
     memory_provider = SQLiteHistoryProvider(
@@ -154,6 +138,10 @@ def _build_agent(
     )
     if inject_context:
         context_providers.insert(0, ProjectContextProvider(context_path))
+
+    # Layer 5: dynamic skill index — available for all agent roles
+    if project_dir is not None:
+        context_providers.append(SkillIndexProvider(agent_id, project_dir))
 
     return Agent(
         name=agent_id,
@@ -294,6 +282,13 @@ class AgentRegistry:
                 is_temp=cfg.get("is_temp", False),
             )
             logger.info("Loaded agent '%s' from %s", cfg["name"], path.name)
+            # Seed runtime skill map from YAML config for dynamic skill index
+            raw_skills = cfg.get("skills", [])
+            if isinstance(raw_skills, list):
+                set_agent_skills(
+                    cfg["name"],
+                    [str(s).strip() for s in raw_skills if str(s).strip()],
+                )
         except Exception:
             logger.exception("Failed to load agent YAML: %s", path)
 

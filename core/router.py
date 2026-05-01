@@ -34,6 +34,7 @@ from agent_framework._types import Content
 from .capability_table import CapabilityTable
 from .registry import AgentRegistry
 from .session_store import SessionStore
+from .skill_index_provider import set_agent_skills, get_agent_skills
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,49 @@ class MessageRouter:
             os.replace(tmp, self._log_path)  # atomic on same filesystem
         except Exception:
             logger.exception("Failed to flush chat log to %s", self._log_path)
+
+    # ------------------------------------------------------------------
+    # Runtime skill state management
+    # ------------------------------------------------------------------
+
+    def seed_agent_skills_from_yaml(self, agent_name: str) -> None:
+        """Initialize runtime skill state from YAML config (only if not already set)."""
+        if get_agent_skills(agent_name):
+            return  # already seeded
+        cfg = self._registry.get_config(agent_name)
+        if cfg is None:
+            return
+        raw_skills = cfg.get("skills", [])
+        if isinstance(raw_skills, list):
+            skills = [str(s).strip() for s in raw_skills if str(s).strip()]
+            set_agent_skills(agent_name, skills)
+
+    def get_mounted_skills(self, agent_name: str) -> list[str]:
+        """Return the list of skills currently mounted for an agent."""
+        self.seed_agent_skills_from_yaml(agent_name)
+        return get_agent_skills(agent_name)
+
+    def mount_skill(self, agent_name: str, skill_name: str) -> str:
+        """Add a skill to the agent's runtime skill set (session-only)."""
+        self.seed_agent_skills_from_yaml(agent_name)
+        current = set(get_agent_skills(agent_name))
+        if skill_name in current:
+            return f"Skill「{skill_name}」已挂载在 {agent_name} 上，无需重复操作。"
+        current.add(skill_name)
+        set_agent_skills(agent_name, sorted(current))
+        logger.info("Mounted skill '%s' onto agent '%s' (runtime)", skill_name, agent_name)
+        return f"✅ 已挂载 Skill「{skill_name}」到 {agent_name}（运行时生效，本次对话有效）"
+
+    def unmount_skill(self, agent_name: str, skill_name: str) -> str:
+        """Remove a skill from the agent's runtime skill set."""
+        self.seed_agent_skills_from_yaml(agent_name)
+        current = set(get_agent_skills(agent_name))
+        if skill_name not in current:
+            return f"Skill「{skill_name}」未挂载在 {agent_name} 上。"
+        current.remove(skill_name)
+        set_agent_skills(agent_name, sorted(current))
+        logger.info("Unmounted skill '%s' from agent '%s' (runtime)", skill_name, agent_name)
+        return f"✅ 已卸载 Skill「{skill_name}」从 {agent_name}（运行时生效，本次对话有效）"
 
     # ------------------------------------------------------------------
     # Temp agent management
@@ -481,6 +525,9 @@ class MessageRouter:
                 "message": f"Agent '{agent_name}' not found",
             }
             return
+
+        # Ensure runtime skill state is seeded from YAML
+        self.seed_agent_skills_from_yaml(agent_name)
 
         session = self._session_store.load(agent_name, self._thread_id)
         if session is None:
