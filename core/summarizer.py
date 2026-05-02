@@ -172,14 +172,11 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
     import re as _re
 
     if not envelopes:
-        logger.info("auto_name: envelopes empty, returning None")
         return None
     # Use first ~20 messages for naming
     text = _envelopes_to_text(envelopes[:20])
     if not text.strip():
-        logger.info("auto_name: text empty after _envelopes_to_text, returning None")
         return None
-    logger.info("auto_name: text length=%d, calling LLM model=%s", len(text), _model())
     try:
         client = _build_llm_client()
         resp = await client.chat.completions.create(
@@ -192,7 +189,7 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
             max_tokens=100,
         )
         raw = (resp.choices[0].message.content or "").strip()
-        logger.info("auto_name raw output: %r", raw)
+        logger.debug("auto_name raw output: %s", raw)
         # Clean up: strip quotes, extract first meaningful line, remove common prefixes
         name = raw.strip().strip('"').strip("'").strip("。").strip("，")
         # Remove common model-generated prefixes
@@ -201,12 +198,10 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
         # Take first line if multi-line
         name = name.split("\n")[0].strip()
         if not name or len(name) > 30:
-            logger.info("auto_name: rejected name=%r (empty=%s, len=%d)", name, not name, len(name))
             return None
         # Truncate overly long names
         if len(name) > 15:
             name = name[:15]
-        logger.info("auto_name: final name=%r", name)
         return name
     except Exception as exc:
         err_text = str(exc).lower()
