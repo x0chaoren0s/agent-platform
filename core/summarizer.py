@@ -173,10 +173,12 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
 
     if not envelopes:
         return None
-    # Use first ~20 messages for naming
+    # Use first ~20 messages for naming, cap text at 4000 chars
     text = _envelopes_to_text(envelopes[:20])
     if not text.strip():
         return None
+    if len(text) > 4000:
+        text = text[:4000]
     try:
         client = _build_llm_client()
         resp = await client.chat.completions.create(
