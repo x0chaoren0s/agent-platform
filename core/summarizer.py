@@ -224,17 +224,13 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
     import re as _re
 
     if not envelopes:
-        logger.info("auto_name: envelopes empty")
         return None
     selected = _pick_naming_envelopes(envelopes)
     if not selected:
-        logger.info("auto_name: no meaningful envelopes after filtering (total=%d)", len(envelopes))
         return None
     text = _envelopes_to_naming_text(selected)
     if not text.strip():
-        logger.info("auto_name: naming text empty")
         return None
-    logger.info("auto_name: selected=%d, text_len=%d", len(selected), len(text))
     try:
         name = None
         for attempt in range(3):
@@ -249,7 +245,7 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
                 max_tokens=100,
             )
             raw = (resp.choices[0].message.content or "").strip()
-            logger.info("auto_name attempt %d raw output: %r", attempt + 1, raw)
+            logger.debug("auto_name attempt %d raw output: %r", attempt + 1, raw)
             if raw:
                 name = raw.strip().strip('"').strip("'").strip("。").strip("，")
                 # Remove common model-generated prefixes
@@ -260,7 +256,7 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
                 if name and 2 <= len(name) <= 30:
                     break
                 name = None
-            logger.info("auto_name attempt %d: empty or invalid, retrying", attempt + 1)
+            logger.debug("auto_name attempt %d: empty or invalid, retrying", attempt + 1)
 
         if not name:
             return None
