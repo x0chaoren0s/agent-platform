@@ -1009,6 +1009,7 @@ async def auto_rename_conversation(thread_id: str):
     if router is None:
         raise HTTPException(status_code=404, detail="对话不存在或未激活")
     envelopes = router.get_recent_envelopes(20)
+    logger.info("auto_name endpoint: thread_id=%s, envelopes=%d", thread_id, len(envelopes))
     name = await summarizer_mod.auto_name_conversation(envelopes)
     if not name:
         raise HTTPException(status_code=502, detail="AI 命名生成失败，请稍后重试")
