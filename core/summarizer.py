@@ -257,7 +257,7 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
                 name = name.strip()
                 # Take first line if multi-line
                 name = name.split("\n")[0].strip()
-                if name and len(name) <= 30:
+                if name and 2 <= len(name) <= 30:
                     break
                 name = None
             logger.info("auto_name attempt %d: empty or invalid, retrying", attempt + 1)
