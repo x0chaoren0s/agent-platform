@@ -236,26 +236,33 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
         return None
     logger.info("auto_name: selected=%d, text_len=%d", len(selected), len(text))
     try:
-        client = _build_llm_client()
-        resp = await client.chat.completions.create(
-            model=_model(),
-            messages=[
-                {"role": "system", "content": _AUTO_NAME_SYSTEM},
-                {"role": "user", "content": f"对话内容：\n\n{text}"},
-            ],
-            temperature=0.3,
-            max_tokens=100,
-        )
-        raw = (resp.choices[0].message.content or "").strip()
-        logger.info("auto_name raw output: %r", raw)
-        # Clean up: strip quotes, extract first meaningful line, remove common prefixes
-        name = raw.strip().strip('"').strip("'").strip("。").strip("，")
-        # Remove common model-generated prefixes
-        name = _re.sub(r'^(好的|对话名称|主题|名称|建议命名为)[：:]?\s*', '', name)
-        name = name.strip()
-        # Take first line if multi-line
-        name = name.split("\n")[0].strip()
-        if not name or len(name) > 30:
+        name = None
+        for attempt in range(3):
+            client = _build_llm_client()
+            resp = await client.chat.completions.create(
+                model=_model(),
+                messages=[
+                    {"role": "system", "content": _AUTO_NAME_SYSTEM},
+                    {"role": "user", "content": f"对话内容：\n\n{text}"},
+                ],
+                temperature=0.3,
+                max_tokens=100,
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            logger.info("auto_name attempt %d raw output: %r", attempt + 1, raw)
+            if raw:
+                name = raw.strip().strip('"').strip("'").strip("。").strip("，")
+                # Remove common model-generated prefixes
+                name = _re.sub(r'^(好的|对话名称|主题|名称|建议命名为)[：:]?\s*', '', name)
+                name = name.strip()
+                # Take first line if multi-line
+                name = name.split("\n")[0].strip()
+                if name and len(name) <= 30:
+                    break
+                name = None
+            logger.info("auto_name attempt %d: empty or invalid, retrying", attempt + 1)
+
+        if not name:
             return None
         # Truncate overly long names
         if len(name) > 15:
