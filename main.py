@@ -1008,7 +1008,7 @@ async def auto_rename_conversation(thread_id: str):
     router = _routers.get(thread_id)
     if router is None:
         raise HTTPException(status_code=404, detail="对话不存在或未激活")
-    envelopes = router.get_recent_envelopes(20)
+    envelopes = router.get_recent_envelopes(60)
     name = await summarizer_mod.auto_name_conversation(envelopes)
     if not name:
         raise HTTPException(status_code=502, detail="AI 命名生成失败，请稍后重试")
@@ -1740,7 +1740,7 @@ async def _auto_name_conversation(thread_id: str) -> None:
         return
     _auto_named.add(thread_id)
 
-    envelopes = router.get_recent_envelopes(20)
+    envelopes = router.get_recent_envelopes(60)
     name = await summarizer_mod.auto_name_conversation(envelopes)
     if not name:
         return

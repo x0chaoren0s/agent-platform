@@ -164,6 +164,58 @@ _AUTO_NAME_SYSTEM = """\
 """
 
 
+def _pick_naming_envelopes(envelopes: list[dict]) -> list[dict]:
+    """Select representative envelopes for naming: skip system/platform, keep user+agent.
+
+    Strategy: take first 3 + last 5 meaningful envelopes so both the initial topic
+    and recent context are captured, even if the conversation has grown large.
+    """
+    # Filter: keep only user/agent messages, drop system/platform/tool dumps
+    meaningful: list[dict] = []
+    for env in envelopes:
+        sender = str(env.get("sender", "")).strip()
+        if sender in ("", "system", "platform"):
+            continue
+        content = str(env.get("content", "")).strip()
+        if not content:
+            continue
+        meaningful.append(env)
+
+    if not meaningful:
+        return []
+
+    if len(meaningful) <= 8:
+        return meaningful
+
+    # Take first 3 + last 5 to cover the full conversation arc
+    selected = meaningful[:3] + meaningful[-5:]
+    # Deduplicate by id (in case first 3 and last 5 overlap)
+    seen: set[str] = set()
+    result: list[dict] = []
+    for env in selected:
+        eid = env.get("id", "")
+        if eid not in seen:
+            seen.add(eid)
+            result.append(env)
+    return result
+
+
+def _envelopes_to_naming_text(envelopes: list[dict]) -> str:
+    """Convert envelopes to compact naming text, truncating each message."""
+    lines: list[str] = []
+    for env in envelopes:
+        ts = (env.get("timestamp") or "")[:19]
+        sender = env.get("sender", "?")
+        content = (env.get("content") or "").strip()
+        if not content:
+            continue
+        # Cap each message to avoid tool-call dumps overwhelming the context
+        if len(content) > 200:
+            content = content[:200] + "…"
+        lines.append(f"[{ts}] {sender}:\n{content}")
+    return "\n\n".join(lines)
+
+
 async def auto_name_conversation(envelopes: list[dict]) -> str | None:
     """Generate a concise Chinese name for a conversation based on its content.
 
@@ -173,12 +225,12 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
 
     if not envelopes:
         return None
-    # Use first ~20 messages for naming, cap text at 4000 chars
-    text = _envelopes_to_text(envelopes[:20])
+    selected = _pick_naming_envelopes(envelopes)
+    if not selected:
+        return None
+    text = _envelopes_to_naming_text(selected)
     if not text.strip():
         return None
-    if len(text) > 4000:
-        text = text[:4000]
     try:
         client = _build_llm_client()
         resp = await client.chat.completions.create(
