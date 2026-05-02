@@ -224,13 +224,17 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
     import re as _re
 
     if not envelopes:
+        logger.info("auto_name: envelopes empty")
         return None
     selected = _pick_naming_envelopes(envelopes)
     if not selected:
+        logger.info("auto_name: no meaningful envelopes after filtering (total=%d)", len(envelopes))
         return None
     text = _envelopes_to_naming_text(selected)
     if not text.strip():
+        logger.info("auto_name: naming text empty")
         return None
+    logger.info("auto_name: selected=%d, text_len=%d", len(selected), len(text))
     try:
         client = _build_llm_client()
         resp = await client.chat.completions.create(
@@ -243,7 +247,7 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
             max_tokens=100,
         )
         raw = (resp.choices[0].message.content or "").strip()
-        logger.debug("auto_name raw output: %s", raw)
+        logger.info("auto_name raw output: %r", raw)
         # Clean up: strip quotes, extract first meaningful line, remove common prefixes
         name = raw.strip().strip('"').strip("'").strip("。").strip("，")
         # Remove common model-generated prefixes
