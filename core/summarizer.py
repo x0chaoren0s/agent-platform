@@ -156,7 +156,11 @@ async def consolidate_to_context(
 
 _AUTO_NAME_SYSTEM = """\
 你是一个对话命名助手。根据以下对话内容，用 6-15 个字概括对话主题。
-直接输出名称，不要解释、不要加标点、不要加引号。
+严格只输出名称本身，禁止输出任何其他内容。不要解释、不要前缀、不要引号、不要标点。
+
+示例输出格式：
+星火万物岗位调研
+漫画翻译流程优化
 """
 
 
@@ -165,6 +169,8 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
 
     Returns the generated name string, or None on failure.
     """
+    import re as _re
+
     if not envelopes:
         return None
     # Use first ~20 messages for naming
@@ -180,11 +186,22 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
                 {"role": "user", "content": f"对话内容：\n\n{text}"},
             ],
             temperature=0.3,
-            max_tokens=50,
+            max_tokens=100,
         )
-        name = (resp.choices[0].message.content or "").strip().strip('"').strip("'").strip()
+        raw = (resp.choices[0].message.content or "").strip()
+        logger.debug("auto_name raw output: %s", raw)
+        # Clean up: strip quotes, extract first meaningful line, remove common prefixes
+        name = raw.strip().strip('"').strip("'").strip("。").strip("，")
+        # Remove common model-generated prefixes
+        name = _re.sub(r'^(好的|对话名称|主题|名称|建议命名为)[：:]?\s*', '', name)
+        name = name.strip()
+        # Take first line if multi-line
+        name = name.split("\n")[0].strip()
         if not name or len(name) > 30:
             return None
+        # Truncate overly long names
+        if len(name) > 15:
+            name = name[:15]
         return name
     except Exception as exc:
         err_text = str(exc).lower()
