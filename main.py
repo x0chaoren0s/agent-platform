@@ -1005,9 +1005,8 @@ async def auto_rename_conversation(thread_id: str):
     """Manually trigger AI auto-naming for a conversation."""
     if _conv_store is None:
         raise HTTPException(status_code=503, detail="ConversationStore not initialized")
-    router = _routers.get(thread_id)
-    if router is None:
-        raise HTTPException(status_code=404, detail="对话不存在或未激活")
+    # Use _get_router to load chat log from disk even if not currently connected
+    router = _get_router(thread_id)
     envelopes = router.get_recent_envelopes(60)
     name = await summarizer_mod.auto_name_conversation(envelopes)
     if not name:
