@@ -1482,7 +1482,7 @@ function appendEscalation(data) {
 // Strip ```tool_call blocks from display text and return them separately
 function extractToolCalls(text) {
   const blocks = [];
-  const cleaned = text.replace(/```tool_call\s*\n([\s\S]*?)(?:\n```|$)/g, (_, body) => {
+  const cleaned = text.replace(/```tool[_-]?call\s*\n([\s\S]*?)(?:\n```|$)/g, (_, body) => {
     blocks.push(body.trim());
     return '';
   }).trim();
@@ -1492,11 +1492,13 @@ function extractToolCalls(text) {
 /** 流式用：已完成的 tool_call 块 + 正写到一半的块（到下一个 ``` 为止不交给正文气泡） */
 function splitStreamingToolCalls(text) {
   const { cleaned: c0, blocks } = extractToolCalls(text);
-  const marker = '```tool_call';
-  const p = c0.indexOf(marker);
-  if (p === -1) {
+  const markerRe = /```tool[_-]?call/;
+  const m = c0.match(markerRe);
+  if (!m) {
     return { cleaned: c0, toolBlocks: blocks, partial: null };
   }
+  const marker = m[0];
+  const p = m.index;
   const before = c0.slice(0, p);
   let after = c0.slice(p + marker.length);
   if (after.startsWith('\r\n')) after = after.slice(2);
