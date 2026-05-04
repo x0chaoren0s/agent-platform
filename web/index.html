@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agent Platform</title>
-<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="/lib/marked.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -635,7 +635,7 @@ function color(name) {
   return colorMap[name];
 }
 function escHtml(s) {
-  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function formatTaskTime(iso) {
@@ -1587,10 +1587,11 @@ function appendMessage(env) {
       <span>${(env.timestamp||'').slice(11,19)}</span>
     </div>
     ${toolCallsHtml}
-    ${hasMainBubble ? `<div class="bubble md-mode" data-raw="${escHtml(cleaned)}">${renderMd(cleaned)}${imgsHtml}</div>` : ''}
+    ${hasMainBubble ? `<div class="bubble md-mode">${renderMd(cleaned)}${imgsHtml}</div>` : ''}
     ${hasMainBubble ? `<button class="md-toggle-btn copy-btn" onclick="copyBubble(this)" title="复制原文">📋</button>` : ''}
     ${hasMainBubble ? `<button class="md-toggle-btn" onclick="toggleMdBubble(this)" title="切换为纯文本">MD</button>` : ''}
     ${pinBtn}`;
+  if (hasMainBubble) { const b = wrap.querySelector('.bubble'); if(b) b.dataset.raw = cleaned; }
   el('msgList').appendChild(wrap);
   scrollBottom();
 }
