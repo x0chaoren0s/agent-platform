@@ -36,6 +36,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 import json_repair
 from pydantic import BaseModel
 import yaml
@@ -379,6 +380,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Agent Platform", lifespan=lifespan)
+app.mount("/lib", StaticFiles(directory=WEB_DIR / "lib"), name="lib")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -502,14 +504,14 @@ _ORCHESTRATOR_YAML_TMPL = textwrap.dedent("""\
       ```
       ```tool_call
       {"tool": "ask_user", "args": {"question": "请确认是否覆盖项目背景 [[confirm:context:rewrite]]", "options": [{"id": "yes", "label": "确认"}, {"id": "no", "label": "取消"}], "urgency": "high"}}
-	      ```
+      ```
 
-	      ```tool_call
-	      {"tool": "ask_user", "args": {"question": "建议创建 Skill「数据调研模板」scope=project [[confirm:create_skill:数据调研模板]]", "options": [{"id": "yes", "label": "同意创建"}, {"id": "no", "label": "暂不创建"}], "urgency": "high"}}
-	      ```
-	      ```tool_call
-	      {"tool": "ask_user", "args": {"question": "建议更新 Skill「web-research」scope=project [[confirm:update_skill:web-research]]", "options": [{"id": "yes", "label": "同意更新"}, {"id": "no", "label": "暂不更新"}], "urgency": "high"}}
-	      ```
+      ```tool_call
+      {"tool": "ask_user", "args": {"question": "建议创建 Skill「数据调研模板」scope=project [[confirm:create_skill:数据调研模板]]", "options": [{"id": "yes", "label": "同意创建"}, {"id": "no", "label": "暂不创建"}], "urgency": "high"}}
+      ```
+      ```tool_call
+      {"tool": "ask_user", "args": {"question": "建议更新 Skill「web-research」scope=project [[confirm:update_skill:web-research]]", "options": [{"id": "yes", "label": "同意更新"}, {"id": "no", "label": "暂不更新"}], "urgency": "high"}}
+      ```
       ```
 
       【协调升级路径（必须按顺序尝试，禁止跳步）】
