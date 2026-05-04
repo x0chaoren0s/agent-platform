@@ -134,7 +134,7 @@ async def load_skill(project_dir, thread_id, caller_agent, *, name):
 3. 内容作为工具执行结果返回 → 进入 `_global_log` → 作为 `【load_skill】\n<完整内容>` 出现在下一轮的 `【历史消息（仅你可见）】` 中
 
 **⚠️ 重要：`load_skill()` 的内容不是永久注入 instructions**。它只是一个工具结果，位于 `_global_log` 中，受所有裁剪机制影响：
-- Token 预算（750K）：超限后被截断
+- Token 预算（650K）：超限后被截断
 - 滚动摘要：60% 最旧对话被压缩，其中的 skill 内容可能丢失
 - 长对话中需重新调用 `load_skill()` 刷新内容
 
@@ -293,7 +293,7 @@ def _inbox_for(self, agent_name: str):
         if agent_name in env.recipients() or env.sender == agent_name
     ]
     # 按 token 预算从新到旧截断
-    budget = int(MODEL_MAX_TOKENS * TOKEN_BUDGET_RATIO)   # = 750,000
+    budget = int(MODEL_MAX_TOKENS * TOKEN_BUDGET_RATIO)   # = 650,000
     kept, used = [], 0
     for env in reversed(full):
         est = _estimate_tokens(env.content or "") + 20    # +20 元数据开销
@@ -310,7 +310,7 @@ def _inbox_for(self, agent_name: str):
 ```
 MODEL_MAX_TOKENS = 1_000_000       # DeepSeek v4 pro 上下文窗口
 TOKEN_BUDGET_RATIO = 0.75          # inbox 占 75%
-→ inbox 预算 = 750,000 tokens      # 约 1,000,000 个中文字符
+→ inbox 预算 = 650,000 tokens      # 约 1,000,000 个中文字符
                                   # 剩余 65% 给 system prompt + 工具定义 + 摘要
 ```
 
@@ -370,7 +370,7 @@ def _needs_token_based_summary(self, agent_name: str) -> bool:
     return (total_est + summary_est) > threshold
 ```
 
-即：inbox 已用 token + 已有摘要 token > 750K 时触发。
+即：inbox 已用 token + 已有摘要 token > 650K 时触发。
 
 ### 执行过程
 
@@ -492,8 +492,8 @@ except Exception as exc:
 |------|----------|--------|----------|------|
 | `max_auto_continue_rounds` | `router.py:538` | 15 | 单轮内最多连续工具调用次数 | 硬限制 |
 | `MODEL_MAX_TOKENS` | `router.py:107` | 1,000,000 | DeepSeek v4 pro 上下文窗口上限 | 硬限制 |
-| `TOKEN_BUDGET_RATIO` | `router.py:108` | 0.75 ~ 750K | inbox 占模型窗口的比例 | 硬限制 |
-| inbox 预算 | `_inbox_for()` | **750,000 tokens** | `_global_log` 中 agent 可见部分的最大 token 数 | 硬限制 |
+| `TOKEN_BUDGET_RATIO` | `router.py:108` | 0.65 ~ 650K | inbox 占模型窗口的比例 | 硬限制 |
+| inbox 预算 | `_inbox_for()` | **650,000 tokens** | `_global_log` 中 agent 可见部分的最大 token 数 | 硬限制 |
 | `_trim_sqlite_history` max_rows | `router.py:814` | **100 行** | `long_term.db` 每 agent 保留行数 | 硬限制 |
 | `KEEP_FULL_MESSAGES` | `router.py:113` | **20 条** | 最新 N 条消息不压缩工具内容 | 硬限制 |
 | `TOOL_COMPRESS_PREVIEW_CHARS` | `router.py:114` | **150** | 压缩后工具结果保留前导字符数 | 硬限制 |
@@ -522,9 +522,9 @@ except Exception as exc:
 │  所有 Envelope：用户消息 + agent回复 + 工具结果 + 系统提醒  │
 │                                                         │
 │  持久化: chat_log/<thread_id>.json                      │
-│  摘要: 超出 750K → 压缩最旧 60% → 摘要存 _inbox_summary  │
+│  摘要: 超出 650K → 压缩最旧 60% → 摘要存 _inbox_summary  │
 └────────────────────┬────────────────────────────────────┘
-                     │ _inbox_for() 筛选（收件人 + 750K 预算）
+                     │ _inbox_for() 筛选（收件人 + 650K 预算）
                      ▼
 ┌─────────────────────────────────────────────────────────┐
 │                _build_prompt_for() 输出                  │
@@ -566,13 +566,13 @@ except Exception as exc:
   → agent 能看到全部上下文
 
 阶段 2: 对话中期（40-80 条）
-  _global_log 增长，inbox 接近 750K
+  _global_log 增长，inbox 接近 650K
   _trim_sqlite_history 开始删除旧行（仅保留 20）
   → long_term.db 中只看到最近 20 条
   → 但 _global_log（inbox）仍完整
 
 阶段 3: 对话后期（80+ 条）
-  inbox 超 750K 预算
+  inbox 超 650K 预算
   → do_rolling_summary 触发，最旧 60% 被压缩
   → 精确的任务分配记录、搜索结果等被摘要替代
   → 摘要模型余额不足时，旧消息直接丢失

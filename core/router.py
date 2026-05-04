@@ -121,7 +121,7 @@ class MessageRouter:
 
     # Token budget controls (DeepSeek v4 = ~1M context)
     MODEL_MAX_TOKENS: int = 1_000_000
-    TOKEN_BUDGET_RATIO: float = 0.75      # inbox budget: 75% of model max (~750K); rest ~250K for system prompt + summary
+    TOKEN_BUDGET_RATIO: float = 0.65      # inbox budget: 65% of model max (~650K); rest ~350K for system prompt + summary
     MAX_TOOL_RESULT_CHARS: int = 3_000     # per-result truncation limit
 
     # Tool compression: keep last N messages full, compress tool parts in older ones
