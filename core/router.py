@@ -121,7 +121,7 @@ class MessageRouter:
 
     # Token budget controls (DeepSeek v4 = ~1M context)
     MODEL_MAX_TOKENS: int = 1_000_000
-    TOKEN_BUDGET_RATIO: float = 0.65      # inbox budget: 65% of model max (~650K); rest ~350K for system prompt + summary
+    TOKEN_BUDGET_RATIO: float = 0.55      # inbox budget: 55% of model max (~550K); rest ~450K for system prompt + summary + SQLite history
     MAX_TOOL_RESULT_CHARS: int = 3_000     # per-result truncation limit
 
     # Tool compression: keep last N messages full, compress tool parts in older ones
@@ -875,7 +875,7 @@ class MessageRouter:
         threshold = int(self.MODEL_MAX_TOKENS * self.TOKEN_BUDGET_RATIO)
         return (total_est + summary_est) > threshold
 
-    def _trim_sqlite_history(self, agent_name: str, max_rows: int = 100) -> None:
+    def _trim_sqlite_history(self, agent_name: str, max_rows: int = 50) -> None:
         """Limit per-agent SQLite history rows so context stays under model limit."""
         if self._log_path is None:
             return
