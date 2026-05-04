@@ -58,12 +58,12 @@ _CONSOLIDATE_SYSTEM = """\
 def _build_llm_client() -> AsyncOpenAI:
     return AsyncOpenAI(
         api_key=os.environ.get("ARK_API_KEY", ""),
-        base_url=os.environ.get("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
+        base_url=os.environ.get("ARK_BASE_URL", "https://api.deepseek.com"),
     )
 
 
 def _model() -> str:
-    return os.environ.get("ARK_MODEL", "doubao-seed-2-0-pro-260215")
+    return os.environ.get("ARK_MODEL", "deepseek-v4-flash")
 
 
 def _envelopes_to_text(envelopes: list[dict]) -> str:
@@ -99,9 +99,9 @@ async def summarize_envelopes(envelopes: list[dict]) -> str:
         return resp.choices[0].message.content or ""
     except Exception as exc:
         err_text = str(exc).lower()
-        if "insufficient balance" in err_text or "error code: 402" in err_text:
-            logger.warning("summarize_envelopes skipped: model balance insufficient")
-            _set_last_notice("摘要模型余额不足，已跳过对话压缩/背景沉淀。")
+        if any(kw in err_text for kw in ("insufficient balance", "error code: 402", "balance", "429", "rate limit")):
+            logger.warning("summarize_envelopes skipped: API unavailable (%s)", err_text[:100])
+            _set_last_notice("摘要模型不可用，已跳过对话压缩。")
             return ""
         logger.exception("summarize_envelopes failed")
         return ""
@@ -146,9 +146,9 @@ async def consolidate_to_context(
         return summary
     except Exception as exc:
         err_text = str(exc).lower()
-        if "insufficient balance" in err_text or "error code: 402" in err_text:
-            logger.warning("consolidate_to_context skipped: model balance insufficient")
-            _set_last_notice("摘要模型余额不足，已跳过对话压缩/背景沉淀。")
+        if any(kw in err_text for kw in ("insufficient balance", "error code: 402", "balance")):
+            logger.warning("consolidate_to_context skipped: API unavailable (%s)", err_text[:100])
+            _set_last_notice("摘要模型不可用，已跳过背景沉淀到 context.md。")
             return ""
         logger.exception("consolidate_to_context failed")
         return ""
@@ -266,8 +266,8 @@ async def auto_name_conversation(envelopes: list[dict]) -> str | None:
         return name
     except Exception as exc:
         err_text = str(exc).lower()
-        if "insufficient balance" in err_text or "error code: 402" in err_text:
-            logger.warning("auto_name_conversation skipped: model balance insufficient")
+        if any(kw in err_text for kw in ("insufficient balance", "error code: 402", "balance")):
+            logger.warning("auto_name_conversation skipped: API unavailable (%s)", err_text[:100])
             return None
         logger.exception("auto_name_conversation failed")
         return None

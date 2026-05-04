@@ -45,6 +45,22 @@ _OUTGOING_COMM_TOOLS: frozenset[str] = frozenset(
     {"submit_deliverable", "send_message", "assign_task"}
 )
 _MENTION_RE = re.compile(r"@([\w\-\u4e00-\u9fff]+)")
+_TOOL_CALL_CONTENT_RE = re.compile(r"```tool[_-]?call\s*\n(.*?)(?:\n```|$)", re.DOTALL)
+
+
+def _extract_tool_names(text: str) -> list[str]:
+    """Extract tool names from tool_call JSON blocks in text."""
+    names: list[str] = []
+    for m in _TOOL_CALL_CONTENT_RE.finditer(text):
+        try:
+            payload = json.loads((m.group(1) or "").strip())
+            if isinstance(payload, dict):
+                name = str(payload.get("tool", ""))
+                if name:
+                    names.append(name)
+        except Exception:
+            pass
+    return names
 
 
 @dataclass
@@ -103,10 +119,14 @@ class MessageRouter:
       per LLM call; older messages are replaced by a rolling summary.
     """
 
-    # Token budget controls (deepseek-v4-pro = ~1M context)
+    # Token budget controls (DeepSeek v4 = ~1M context)
     MODEL_MAX_TOKENS: int = 1_000_000
-    TOKEN_BUDGET_RATIO: float = 0.35      # inbox budget: 35% of model max; rest for system prompt + summary
-    MAX_TOOL_RESULT_CHARS: int = 5_000     # per-result truncation limit
+    TOKEN_BUDGET_RATIO: float = 0.75      # inbox budget: 75% of model max (~750K); rest ~250K for system prompt + summary
+    MAX_TOOL_RESULT_CHARS: int = 3_000     # per-result truncation limit
+
+    # Tool compression: keep last N messages full, compress tool parts in older ones
+    KEEP_FULL_MESSAGES: int = 20
+    TOOL_COMPRESS_PREVIEW_CHARS: int = 150
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
@@ -278,22 +298,66 @@ class MessageRouter:
         kept.reverse()
         return kept
 
+    def _format_for_prompt(self, env: Envelope, *, compress_tools: bool = False) -> str:
+        """Format one envelope for the history section of the prompt.
+
+        When *compress_tools* is True and the envelope is a tool result or
+        contains tool_call blocks, the content is compressed to a summary.
+        """
+        to_str = ", ".join(env.to) if env.to else "(all)"
+        cc_str = f" | CC: {', '.join(env.cc)}" if env.cc else ""
+        header = f"[{env.timestamp[:19]}] From: {env.sender} → To: {to_str}{cc_str}\n"
+
+        if not compress_tools:
+            return header + env.content
+
+        # Case 1: tool result (platform message)
+        if env.metadata.get("tool_feedback"):
+            tools_summary = []
+            for tr in env.metadata.get("tool_results", []):
+                tool_name = tr.get("tool", "?")
+                result_text = tr.get("result", "") or ""
+                preview = result_text[:self.TOOL_COMPRESS_PREVIEW_CHARS].replace("\n", " ")
+                total = len(result_text)
+                ok = "✗" if result_text[:50].startswith("错误") else "✓"
+                suffix = "…" if len(result_text) > self.TOOL_COMPRESS_PREVIEW_CHARS else ""
+                tools_summary.append(
+                    f"  {ok} {tool_name} | {total}字 | {preview}{suffix}"
+                )
+            return header + "【工具结果摘要】\n" + "\n".join(tools_summary)
+
+        # Case 2: agent reply containing tool_call blocks
+        content = env.content or ""
+        if "```tool_call" in content or "```toolcall" in content or "```tool-call" in content:
+            tool_names = _extract_tool_names(content)
+            first_marker = None
+            for marker in ("```tool_call", "```toolcall", "```tool-call"):
+                idx = content.find(marker)
+                if idx != -1 and (first_marker is None or idx < first_marker):
+                    first_marker = idx
+            body = content[:first_marker].strip() if first_marker is not None else ""
+            tags = f"[已调用: {', '.join(tool_names)}]" if tool_names else ""
+            if body:
+                return header + body + "\n" + tags
+            else:
+                return header + f"[工具调用: {', '.join(tool_names)}]" if tool_names else header + "(工具调用)"
+
+        # Case 3: normal message
+        return header + content
+
     def _build_prompt_for(self, agent_name: str, new_envelope: Envelope) -> str:
         """Build text-only prompt string (used when no images)."""
         inbox = self._inbox_for(agent_name)
         history_lines = []
-        for env in inbox:
+        for i, env in enumerate(inbox):
             if env.id == new_envelope.id:
                 continue
-            to_str = ", ".join(env.to) if env.to else "(all)"
-            cc_str = f" | CC: {', '.join(env.cc)}" if env.cc else ""
-            history_lines.append(
-                f"[{env.timestamp[:19]}] From: {env.sender} → To: {to_str}{cc_str}\n{env.content}"
-            )
+            is_old = i < len(inbox) - self.KEEP_FULL_MESSAGES
+            history_lines.append(self._format_for_prompt(env, compress_tools=is_old))
+
         new_msg = f"【新消息 from {new_envelope.sender}】\n{new_envelope.content}"
 
         parts = []
-        # Prepend rolling summary if available for this agent
         summary = self._inbox_summary.get(agent_name, "")
         if summary:
             parts.append(f"【历史摘要（早期对话已压缩）】\n{summary}")
@@ -535,7 +599,7 @@ class MessageRouter:
 
         current_envelope = envelope
         auto_continue_rounds = 0
-        max_auto_continue_rounds = 3
+        max_auto_continue_rounds = 15
         tools_called = False
         has_outgoing_comm = False
         advisory_sent = False
@@ -811,7 +875,7 @@ class MessageRouter:
         threshold = int(self.MODEL_MAX_TOKENS * self.TOKEN_BUDGET_RATIO)
         return (total_est + summary_est) > threshold
 
-    def _trim_sqlite_history(self, agent_name: str, max_rows: int = 20) -> None:
+    def _trim_sqlite_history(self, agent_name: str, max_rows: int = 100) -> None:
         """Limit per-agent SQLite history rows so context stays under model limit."""
         if self._log_path is None:
             return
